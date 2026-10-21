@@ -57,8 +57,13 @@ jobs:
         if: github.event.pull_request.merged == true
         env:
           GH_TOKEN: ${{ github.token }}
+          # Passed as env vars, never pasted into the script: PR titles are untrusted text.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          gh release create "v0.1.${{ github.run_number }}" opensign-player-*.apk \
-            --title "OpenSign Player 0.1.${{ github.run_number }}" \
-            --notes "Built from PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}" \
-            --target "${{ github.event.pull_request.merge_commit_sha }}"
+          gh release create "v0.1.${RUN_NUMBER}" opensign-player-*.apk \
+            --title "OpenSign Player 0.1.${RUN_NUMBER}" \
+            --notes "Built from PR #${PR_NUMBER}: ${PR_TITLE}" \
+            --target "${MERGE_SHA}"
