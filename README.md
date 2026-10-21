@@ -62,10 +62,10 @@ We are not claiming parity everywhere: the last row is the roadmap. Where OpenSi
 - The server uses plain HTTP and a single admin password; put it behind a reverse proxy with HTTPS before exposing it to the internet.
 
 ## Releases (CI)
-When a pull request is merged into `main`, `.github/workflows/release-apk.yml` builds a signed release APK and publishes it as a GitHub Release.
+Open pull requests only run checks (server syntax check + Android compile; no APK is built). When a pull request is merged into `main`, `.github/workflows/release-apk.yml` builds a signed release APK and publishes it as a GitHub Release.
 Set these repository secrets for a production-signed APK (otherwise it falls back to the debug key and the workflow warns):
 `KEYSTORE_BASE64` (`base64 -i release.jks`), `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.
 Create a keystore with: `keytool -genkeypair -v -keystore release.jks -alias opensign -keyalg RSA -keysize 2048 -validity 10000`
 
 ## Status
-CI builds a signed APK on every merged PR.
+Open PRs run checks only; a signed APK is built and released after merge.
