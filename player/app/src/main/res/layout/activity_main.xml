@@ -37,4 +37,15 @@
         android:padding="48dp"
         android:textColor="@android:color/white"
         android:textSize="32sp" />
+
+    <TextView
+        android:id="@+id/alertView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:padding="64dp"
+        android:textColor="@android:color/white"
+        android:textSize="56sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
 </FrameLayout>

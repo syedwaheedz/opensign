@@ -21,6 +21,10 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.load
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentLinkedQueue
+import android.graphics.Color
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +44,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var imageView: ImageView
     private lateinit var webView: WebView
     private lateinit var statusView: TextView
+    private lateinit var alertView: TextView
+    private val pendingPlays = ConcurrentLinkedQueue<JSONObject>() // proof-of-play, sent with the next heartbeat
 
     @Volatile private var config: Config? = null
     @Volatile private var pairingCode: String? = null
@@ -61,6 +67,7 @@ class MainActivity : AppCompatActivity() {
         imageView = findViewById(R.id.imageView)
         webView = findViewById(R.id.webView)
         statusView = findViewById(R.id.statusView)
+        alertView = findViewById(R.id.alertView)
 
         player = ExoPlayer.Builder(this).build().also { playerView.player = it }
         webView.settings.apply {
@@ -76,6 +83,7 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         jobs += lifecycleScope.launch { syncLoop() }
         jobs += lifecycleScope.launch { heartbeatLoop() }
+        jobs += lifecycleScope.launch { alertLoop() }
         jobs += lifecycleScope.launch { playbackLoop() }
     }
 
@@ -122,7 +130,7 @@ class MainActivity : AppCompatActivity() {
     private suspend fun syncLoop() {
         var failures = 0
         while (true) {
-            var wait = 60_000L
+            var wait = 0L // 0 = long-poll for changes instead of sleeping
             if (prefs.serverUrl == null) {
                 // First run: look for the server on the network instead of asking for an address.
                 val found = withContext(Dispatchers.IO) { Discovery.find() }
@@ -157,13 +165,30 @@ class MainActivity : AppCompatActivity() {
                     withContext(Dispatchers.IO) { Discovery.find() }?.let { prefs.serverUrl = it; failures = 0 }
                 }
             }
-            delay(wait)
+            if (wait > 0) {
+                delay(wait)
+            } else {
+                // Returns as soon as the server has something new; fails fast when offline.
+                val ok = try {
+                    withContext(Dispatchers.IO) { api.waitForChange(config?.version) }
+                    true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    false
+                }
+                if (!ok) delay(10_000)
+            }
         }
     }
 
     private suspend fun heartbeatLoop() {
         while (true) {
-            runCatching { withContext(Dispatchers.IO) { api.heartbeat(nowPlaying, config?.version) } }
+            val batch = generateSequence { pendingPlays.poll() }.take(200).toList()
+            val sent = runCatching {
+                withContext(Dispatchers.IO) { api.heartbeat(nowPlaying, config?.version, JSONArray(batch)) }
+            }.isSuccess
+            if (!sent && pendingPlays.size < 2_000) pendingPlays.addAll(batch) // keep for the next try
             delay(30_000)
         }
     }
@@ -207,6 +232,7 @@ class MainActivity : AppCompatActivity() {
                 index = (index + 1) % items.size
             }
             nowPlaying = item.name
+            val startedAt = System.currentTimeMillis()
             try {
                 when (item.type) {
                     "image" -> showImage(item, forMs ?: (item.duration * 1000L))
@@ -219,6 +245,29 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 delay(2_000) // bad item: skip rather than getting stuck
             }
+            val shownMs = System.currentTimeMillis() - startedAt
+            if (shownMs >= 1_000 && pendingPlays.size < 2_000) {
+                pendingPlays.add(
+                    JSONObject().put("itemId", item.id).put("name", item.name)
+                        .put("start", startedAt + clockOffset).put("ms", shownMs)
+                )
+            }
+        }
+    }
+
+    /** Shows or hides the emergency alert overlay; playback keeps running underneath. */
+    private suspend fun alertLoop() {
+        while (true) {
+            val a = config?.alert
+            val active = a != null && a.until > System.currentTimeMillis() + clockOffset
+            if (active && a != null) {
+                alertView.text = a.message
+                alertView.setBackgroundColor(runCatching { Color.parseColor(a.color) }.getOrDefault(Color.RED))
+                alertView.visibility = View.VISIBLE
+            } else {
+                alertView.visibility = View.GONE
+            }
+            delay(1_000)
         }
     }
 

@@ -37,6 +37,25 @@ Hold **OK** or press **Menu** on the remote to change the server address.
 Admin > **Video walls** joins several screens into one big display. Create a wall, choose a grid (e.g. 2 x 2), a playlist, and assign a screen to each tile. The **On/Off toggle** enables it; switching it off returns every screen to its own playlist and schedule.
 Screens stay in step by deriving the current item from the server clock, so give every item (videos too) a duration. Mount the TVs in the same order as the grid.
 
+## Compared with Samsung MagicINFO and JioSignage
+| | OpenSign | MagicINFO | JioSignage |
+|---|---|---|---|
+| Cost / licence | Free, open source | Paid licences and add-ons | Paid, vendor hardware options |
+| Screens supported | Any Android TV / box / stick | Samsung displays | Any screen via Jio players |
+| Setup | Double-click server, TV auto-finds it, one-click add | Server install + licensing | Cloud account + device setup |
+| Images, video, web pages | yes | yes | yes |
+| YouTube / Instagram / Facebook links | **yes** | web author only | no |
+| Text, ticker and clock widgets (no design tool) | **yes** | via Author app | via layouts |
+| Video wall (many screens as one, on/off toggle) | **yes** | yes | partial |
+| Scheduling by day and time, offline playback | yes | yes | yes |
+| Instant push (changes reach screens in seconds) | **yes** | yes | yes |
+| Emergency alert to all or chosen screens | **yes** | no | yes |
+| Proof-of-play report + CSV export | **yes (free)** | paid add-on (Insight) | audit reports |
+| Self-hosted, your data stays with you | **yes** | on-prem edition | cloud |
+| Multi-zone layouts, user roles, audience analytics, 8K, hardware remote control | **not yet** | yes | yes |
+
+We are not claiming parity everywhere: the last row is the roadmap. Where OpenSign wins today is cost, openness, hardware choice, beginner setup and the features marked bold.
+
 ## Notes
 - Schedules are evaluated on the TV, so they keep working offline. The player re-syncs every 60 s.
 - Auto-start on boot: Android 10+ restricts background activity launches, so some devices need "Display over other apps" granted, or the app set as the home/launcher app.

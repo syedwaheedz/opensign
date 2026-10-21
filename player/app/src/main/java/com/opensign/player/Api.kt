@@ -5,6 +5,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -45,11 +46,21 @@ class Api(private val prefs: Prefs) {
         throw IOException("could not register")
     }
 
-    fun heartbeat(nowPlaying: String?, version: String?) {
+    // Held open by the server until something changes (or ~25 s), so edits and alerts arrive within seconds.
+    private val longPoll = http.newBuilder().readTimeout(40, TimeUnit.SECONDS).build()
+
+    fun waitForChange(version: String?) {
+        val v = version?.let { "?v=$it" } ?: ""
+        val req = Request.Builder().url("${base()}/api/player/${prefs.deviceId}/wait$v").build()
+        longPoll.newCall(req).execute().use { if (!it.isSuccessful) throw IOException("wait ${it.code}") }
+    }
+
+    fun heartbeat(nowPlaying: String?, version: String?, plays: JSONArray) {
         val body = JSONObject()
             .put("nowPlaying", nowPlaying ?: JSONObject.NULL)
             .put("version", version ?: JSONObject.NULL)
             .put("appVersion", BuildConfigVersion.NAME)
+            .put("plays", plays)
             .toString()
         val req = Request.Builder().url("${base()}/api/player/${prefs.deviceId}/heartbeat").post(body.toRequestBody(jsonType)).build()
         http.newCall(req).execute().close()

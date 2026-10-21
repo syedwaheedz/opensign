@@ -14,10 +14,11 @@ const PUBLIC_URL = process.env.PUBLIC_URL; // optional, e.g. http://192.168.1.10
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const MEDIA_DIR = path.join(DATA_DIR, 'media');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+const PLAYS_FILE = path.join(DATA_DIR, 'plays.ndjson'); // append-only proof-of-play log
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 // ---- tiny JSON store -------------------------------------------------------
-let db = { devices: [], media: [], playlists: [], walls: [], admin: null };
+let db = { devices: [], media: [], playlists: [], walls: [], admin: null, alert: null };
 if (fs.existsSync(DB_FILE)) db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) };
 function save() {
   const tmp = DB_FILE + '.tmp';
@@ -26,6 +27,16 @@ function save() {
 }
 const uid = () => crypto.randomUUID();
 const pairingCode = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+
+// ---- instant push: players hold a request open and we answer the moment their config changes ----
+const waiters = new Map(); // deviceId -> Set<res>
+function notify(deviceIds) {
+  for (const id of deviceIds ?? waiters.keys()) {
+    for (const res of waiters.get(id) ?? []) res.json({ changed: true });
+    waiters.delete(id);
+  }
+}
+const notifyDevice = (d) => notify([d.deviceId]);
 
 // ---- app -------------------------------------------------------------------
 const app = express();
@@ -91,6 +102,7 @@ function classifyLink(raw) {
 // A full-screen page that hosts the provider's embed; the player just loads this like any web page.
 app.get('/embed/:id', (req, res) => {
   const m = db.media.find((x) => x.id === req.params.id);
+  if (m?.widget) return res.type('html').send(widgetPage(m.widget));
   if (!m?.embed) return res.status(404).end();
   const e = m.embed, enc = encodeURIComponent;
   let frame;
@@ -110,6 +122,26 @@ app.get('/embed/:id', (req, res) => {
 html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{border:0;width:100%;height:100%}
 iframe.tall{display:block;margin:0 auto;height:100%;width:min(100vw,calc(100vh*.62))}</style>${frame}`);
 });
+
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function widgetPage(w) {
+  const head = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+html,body{margin:0;height:100%;overflow:hidden;background:${w.bg};color:${w.fg};font-family:system-ui,sans-serif}
+.c{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4vw;box-sizing:border-box}`;
+  if (w.kind === 'clock') {
+    return head + `.t{font-size:22vw;font-weight:700;line-height:1}.d{font-size:5vw;opacity:.8;margin-top:2vw}</style>
+<div class="c"><div class="t" id="t"></div><div class="d" id="d"></div></div>
+<script>function u(){const n=new Date();t.textContent=n.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});d.textContent=n.toLocaleDateString([],{weekday:'long',day:'numeric',month:'long',year:'numeric'})}u();setInterval(u,1000)</script>`;
+  }
+  if (w.kind === 'ticker') {
+    return head + `.m{white-space:nowrap;font-size:14vh;font-weight:700;animation:s 18s linear infinite;padding-left:100vw}
+@keyframes s{to{transform:translateX(-100%)}}.c{padding:0}</style><div class="c" style="justify-content:center"><div class="m" id="m">${esc(w.text)}</div></div>
+<script>m.style.animationDuration=Math.max(10,m.textContent.length*0.35)+'s'</script>`;
+  }
+  return head + `.x{font-size:9vw;font-weight:700;line-height:1.2;max-width:90vw;white-space:pre-wrap;word-break:break-word}</style>
+<div class="c"><div class="x" id="x">${esc(w.text)}</div></div>
+<script>let f=9;while(x.scrollHeight>innerHeight*0.9&&f>1.5){f-=0.5;x.style.fontSize=f+'vw'}</script>`;
+}
 
 const baseUrl = (req) => PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
 
@@ -141,6 +173,13 @@ function wallFor(d) {
   return null;
 }
 
+function alertFor(d) {
+  const a = db.alert;
+  if (!a || a.until <= Date.now()) return null;
+  if (a.deviceIds.length && !a.deviceIds.includes(d.id)) return null;
+  return { message: a.message, color: a.color, until: a.until };
+}
+
 function buildConfig(req, d) {
   const wall = wallFor(d);
   const playlistIds = new Set(wall ? [wall.playlistId] : [d.defaultPlaylistId, ...d.schedule.map((s) => s.playlistId)].filter(Boolean));
@@ -155,13 +194,13 @@ function buildConfig(req, d) {
         if (!m) return [];
         return [{
           id: m.id, name: m.name, type: m.type, duration: it.duration || 10, size: m.size || 0,
-          src: m.file ? `${baseUrl(req)}/media/${m.file}` : m.embed ? `${baseUrl(req)}/embed/${m.id}` : m.url,
+          src: m.file ? `${baseUrl(req)}/media/${m.file}` : m.embed || m.widget ? `${baseUrl(req)}/embed/${m.id}` : m.url,
         }];
       }),
     };
   }
   const body = {
-    rev: d.rev, name: d.name, defaultPlaylistId: d.defaultPlaylistId, wall,
+    rev: d.rev, name: d.name, defaultPlaylistId: d.defaultPlaylistId, wall, alert: alertFor(d),
     schedule: wall ? [] : d.schedule.filter((s) => playlists[s.playlistId]), playlists,
   };
   const version = crypto.createHash('sha1').update(JSON.stringify(body)).digest('hex').slice(0, 12);
@@ -177,6 +216,18 @@ app.get('/api/player/:deviceId/config', (req, res) => {
   res.json({ paired: true, ...buildConfig(req, d) });
 });
 
+app.get('/api/player/:deviceId/wait', (req, res) => {
+  const d = db.devices.find((x) => x.deviceId === req.params.deviceId);
+  if (!d) return res.status(404).json({ error: 'unknown device' });
+  d.lastSeen = Date.now();
+  if (req.query.v && d.paired && buildConfig(req, d).version !== req.query.v) return res.json({ changed: true });
+  const set = waiters.get(d.deviceId) ?? new Set();
+  waiters.set(d.deviceId, set);
+  set.add(res);
+  const timer = setTimeout(() => { set.delete(res); res.json({ changed: false }); }, 25000);
+  res.on('close', () => { clearTimeout(timer); set.delete(res); });
+});
+
 app.post('/api/player/:deviceId/heartbeat', (req, res) => {
   const d = db.devices.find((x) => x.deviceId === req.params.deviceId);
   if (!d) return res.status(404).json({ error: 'unknown device' });
@@ -184,6 +235,11 @@ app.post('/api/player/:deviceId/heartbeat', (req, res) => {
   d.nowPlaying = req.body?.nowPlaying ?? null;
   d.configVersion = req.body?.version ?? null;
   d.appVersion = req.body?.appVersion ?? d.appVersion;
+  const plays = Array.isArray(req.body?.plays) ? req.body.plays.slice(0, 500) : [];
+  const lines = plays
+    .filter((p) => typeof p?.itemId === 'string' && Number.isFinite(p.start) && Number.isFinite(p.ms))
+    .map((p) => JSON.stringify({ d: d.id, i: p.itemId, n: String(p.name || '').slice(0, 200), t: Math.round(p.start), ms: Math.round(p.ms) }));
+  if (lines.length) fs.appendFileSync(PLAYS_FILE, lines.join('\n') + '\n');
   save();
   res.json({ ok: true });
 });
@@ -303,6 +359,7 @@ api.post('/devices/claim', (req, res) => {
   d.name = req.body?.name || d.model || 'Screen';
   d.rev++;
   save();
+  notifyDevice(d);
   res.json(d);
 });
 api.put('/devices/:id', (req, res) => {
@@ -321,6 +378,7 @@ api.put('/devices/:id', (req, res) => {
   }
   d.rev++;
   save();
+  notifyDevice(d);
   res.json(d);
 });
 api.post('/devices/:id/refresh', (req, res) => {
@@ -328,6 +386,7 @@ api.post('/devices/:id/refresh', (req, res) => {
   if (!d) return res.status(404).json({ error: 'not found' });
   d.rev++;
   save();
+  notifyDevice(d);
   res.json(d);
 });
 api.delete('/devices/:id', (req, res) => {
@@ -340,7 +399,80 @@ api.delete('/devices/:id', (req, res) => {
 function bumpAll() {
   for (const d of db.devices) d.rev++;
   save();
+  notify();
 }
+
+// ---- emergency alerts: full-screen takeover on all (or chosen) screens, pushed instantly ----
+api.get('/alert', (_req, res) => res.json(db.alert && db.alert.until > Date.now() ? db.alert : null));
+api.post('/alert', (req, res) => {
+  const message = String(req.body?.message || '').trim().slice(0, 500);
+  if (!message) return res.status(400).json({ error: 'Type the alert message' });
+  const minutes = Math.min(1440, Math.max(1, Number(req.body?.minutes) || 5));
+  const deviceIds = (req.body?.deviceIds || []).filter((id) => db.devices.some((d) => d.id === id));
+  db.alert = {
+    id: uid(), message, deviceIds, until: Date.now() + minutes * 60000,
+    color: /^#[0-9a-f]{6}$/i.test(req.body?.color) ? req.body.color : '#c62828',
+  };
+  save();
+  notify(db.devices.filter((d) => !deviceIds.length || deviceIds.includes(d.id)).map((d) => d.deviceId));
+  res.json(db.alert);
+});
+api.delete('/alert', (_req, res) => {
+  db.alert = null;
+  save();
+  notify();
+  res.json({ ok: true });
+});
+
+// ---- proof of play ----
+function readPlays(days) {
+  if (!fs.existsSync(PLAYS_FILE)) return [];
+  const since = Date.now() - days * 86400000;
+  return fs.readFileSync(PLAYS_FILE, 'utf8').split('\n').filter(Boolean).flatMap((l) => {
+    try { const p = JSON.parse(l); return p.t >= since ? [p] : []; } catch { return []; }
+  });
+}
+const daysParam = (req) => Math.min(365, Math.max(1, Number(req.query.days) || 7));
+api.get('/reports/plays', (req, res) => {
+  const plays = readPlays(daysParam(req));
+  const agg = (keyOf, nameOf) => {
+    const m = new Map();
+    for (const p of plays) {
+      const k = keyOf(p), e = m.get(k) || { name: nameOf(p), plays: 0, seconds: 0, last: 0 };
+      e.plays++; e.seconds += p.ms / 1000; e.last = Math.max(e.last, p.t);
+      m.set(k, e);
+    }
+    return [...m.values()].sort((a, b) => b.plays - a.plays).map((e) => ({ ...e, seconds: Math.round(e.seconds) }));
+  };
+  res.json({
+    total: plays.length,
+    byMedia: agg((p) => p.i, (p) => db.media.find((x) => x.id === p.i)?.name || p.n),
+    byScreen: agg((p) => p.d, (p) => db.devices.find((x) => x.id === p.d)?.name || 'Removed screen'),
+  });
+});
+api.get('/reports/plays.csv', (req, res) => {
+  const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
+  const rows = readPlays(daysParam(req)).map((p) =>
+    [new Date(p.t).toISOString(), q(db.devices.find((x) => x.id === p.d)?.name || p.d), q(db.media.find((x) => x.id === p.i)?.name || p.n), (p.ms / 1000).toFixed(1)].join(','));
+  res.type('text/csv').send(['time,screen,media,seconds', ...rows].join('\n') + '\n');
+});
+
+// ---- widgets: text, scrolling ticker and clock, rendered as pages (no design tools needed) ----
+api.post('/media/widget', (req, res) => {
+  const b = req.body || {};
+  const kind = ['text', 'ticker', 'clock'].includes(b.kind) ? b.kind : null;
+  if (!kind) return res.status(400).json({ error: 'Unknown widget' });
+  if (kind !== 'clock' && !String(b.text || '').trim()) return res.status(400).json({ error: 'Type the text to show' });
+  const color = (v, d) => (/^#[0-9a-f]{6}$/i.test(v) ? v : d);
+  const m = {
+    id: uid(), type: 'web', provider: 'widget', size: 0, createdAt: Date.now(),
+    name: b.name || (kind === 'clock' ? 'Clock' : String(b.text).slice(0, 40)),
+    widget: { kind, text: String(b.text || '').slice(0, 1000), bg: color(b.bg, '#0b1220'), fg: color(b.fg, '#ffffff') },
+  };
+  db.media.push(m);
+  save();
+  res.json(m);
+});
 
 app.use('/api', api);
 
