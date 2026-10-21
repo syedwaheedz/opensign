@@ -1,9 +1,9 @@
 name: Release APK
 
-# Runs after a pull request is merged into main.
+# Builds every pull request (verification); publishes a release once the PR is merged into main.
 on:
   pull_request:
-    types: [closed]
+    types: [opened, synchronize, reopened, closed]
     branches: [main]
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-apk:
-    if: github.event.pull_request.merged == true
+    if: github.event.action != 'closed' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +54,7 @@ jobs:
           path: opensign-player-*.apk
 
       - name: Publish GitHub Release
+        if: github.event.pull_request.merged == true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
