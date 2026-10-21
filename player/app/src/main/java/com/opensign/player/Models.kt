@@ -8,6 +8,9 @@ data class Item(val id: String, val name: String, val type: String, val duration
 /** This screen's tile (col,row) of a cols x rows video wall. */
 data class Wall(val cols: Int, val rows: Int, val col: Int, val row: Int, val playlistId: String)
 
+/** Emergency message that takes over the whole screen until [until] (server time, ms). */
+data class Alert(val message: String, val color: String, val until: Long)
+
 data class Slot(val playlistId: String, val days: Set<Int>, val startMin: Int, val endMin: Int)
 
 data class Config(
@@ -17,6 +20,7 @@ data class Config(
     val playlists: Map<String, List<Item>>,
     val wall: Wall? = null,
     val serverTime: Long = 0,
+    val alert: Alert? = null,
 ) {
     /** Items to play right now: first matching schedule slot, else the default playlist. */
     fun activePlaylist(now: Calendar = Calendar.getInstance()): Pair<String, List<Item>>? {
@@ -55,7 +59,8 @@ data class Config(
             val wall = o.optJSONObject("wall")?.let {
                 Wall(it.getInt("cols"), it.getInt("rows"), it.getInt("col"), it.getInt("row"), it.getString("playlistId"))
             }
-            return Config(o.getString("version"), def, slots, pls, wall, o.optLong("serverTime", 0))
+            val alert = o.optJSONObject("alert")?.let { Alert(it.getString("message"), it.getString("color"), it.getLong("until")) }
+            return Config(o.getString("version"), def, slots, pls, wall, o.optLong("serverTime", 0), alert)
         }
 
         private fun toMin(hhmm: String) = hhmm.substring(0, 2).toInt() * 60 + hhmm.substring(3, 5).toInt()

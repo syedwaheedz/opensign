@@ -50,6 +50,8 @@
       <button data-tab="media">Media</button>
       <button data-tab="playlists">Playlists</button>
       <button data-tab="walls">Video walls</button>
+      <button data-tab="alerts">Alerts</button>
+      <button data-tab="reports">Reports</button>
     </nav>
     <button onclick="logout()">Sign out</button>
   </header>
@@ -58,7 +60,7 @@
 <script>
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 let token = localStorage.getItem('token'), tab = localStorage.getItem('tab') || 'devices';
-let devices = [], media = [], playlists = [], walls = [], editing = null, timer;
+let devices = [], media = [], playlists = [], walls = [], alertNow = null, report = null, reportDays = 7, editing = null, timer;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
@@ -88,18 +90,19 @@ async function login(e) {
 }
 function logout() { localStorage.removeItem('token'); token = null; clearInterval(timer); $('#app').hidden = true; showLogin(); }
 async function load() {
-  [devices, media, playlists, walls] = await Promise.all([api('/devices'), api('/media'), api('/playlists'), api('/walls')]);
+  [devices, media, playlists, walls, alertNow] = await Promise.all([api('/devices'), api('/media'), api('/playlists'), api('/walls'), api('/alert')]);
+  if (tab === 'reports') report = await api('/reports/plays?days=' + reportDays);
   render();
 }
 function start() {
   $('#login').hidden = true; $('#app').hidden = false;
   document.querySelectorAll('nav button').forEach((b) => b.onclick = () => { tab = b.dataset.tab; editing = null; localStorage.setItem('tab', tab); render(); });
   load(); clearInterval(timer);
-  timer = setInterval(() => { if (tab === 'devices' && !document.activeElement.closest('#view')) load(); }, 15000);
+  timer = setInterval(() => { if ((tab === 'devices' || tab === 'reports') && !document.activeElement.closest('#view')) load(); }, 15000);
 }
 function render() {
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  $('#view').innerHTML = { devices: renderDevices, media: renderMedia, playlists: renderPlaylists, walls: renderWalls }[tab]();
+  $('#view').innerHTML = { devices: renderDevices, media: renderMedia, playlists: renderPlaylists, walls: renderWalls, alerts: renderAlerts, reports: renderReports }[tab]();
 }
 const plOptions = (sel) => '<option value="">— none —</option>' + playlists.map((p) => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
 
@@ -150,9 +153,11 @@ function renderMedia() {
     <input id="files" type="file" multiple accept="image/*,video/*"><button class="primary" onclick="uploadFiles()">Upload</button>
     </div>
     <div class="row" style="margin-top:10px"><input id="webName" placeholder="Name (optional)"><input id="webUrl" placeholder="Paste a YouTube, Instagram, Facebook, image, video or web page link" class="grow"><button onclick="addWeb()">Add link</button></div>
+    <div class="row" style="margin-top:10px"><select id="wKind"><option value="text">Text slide</option><option value="ticker">Scrolling ticker</option><option value="clock">Clock</option></select>
+      <input id="wText" placeholder="Message to show (not needed for a clock)" class="grow"><label>Background <input id="wBg" type="color" value="#0b1220"></label><label>Text <input id="wFg" type="color" value="#ffffff"></label><button onclick="addWidget()">Add</button></div>
     <small>Links need internet on the TV. Instagram and Facebook only show public posts; YouTube plays muted. Set how long each link plays in the playlist.</small></div>
     <div class="grid">${media.map((m) => `<div class="thumb"><div class="pic">${
-      m.type === 'image' ? `<img src="${m.file ? '/media/' + m.file : esc(m.url)}" loading="lazy">` : m.type === 'video' ? `<video src="${m.file ? '/media/' + m.file : esc(m.url)}#t=0.5" preload="metadata" muted></video>` : `🌐 ${m.provider || 'web page'}`}</div>
+      m.type === 'image' ? `<img src="${m.file ? '/media/' + m.file : esc(m.url)}" loading="lazy">` : m.type === 'video' ? `<video src="${m.file ? '/media/' + m.file : esc(m.url)}#t=0.5" preload="metadata" muted></video>` : `${m.provider === 'widget' ? '🧩 ' + m.widget.kind : '🌐 ' + (m.provider || 'web page')}`}</div>
       <div class="meta">${esc(m.name)}<br><small>${m.provider || m.type}${m.size ? ' · ' + (m.size / 1048576).toFixed(1) + ' MB' : ''}</small>
       <br><button class="danger" onclick="delMedia('${m.id}')">Delete</button></div></div>`).join('') || '<p class="muted">No media yet.</p>'}</div>`;
 }
@@ -161,6 +166,7 @@ async function uploadFiles() {
   const fd = new FormData(); for (const x of f) fd.append('files', x);
   await api('/media', { method:'POST', body: fd }); load();
 }
+async function addWidget() { await api('/media/widget', { method:'POST', body:{ kind: $('#wKind').value, text: $('#wText').value, bg: $('#wBg').value, fg: $('#wFg').value } }); load(); }
 async function addWeb() { await api('/media/link', { method:'POST', body:{ name: $('#webName').value, url: $('#webUrl').value } }); load(); }
 async function delMedia(id) { if (confirm('Delete this media? It is removed from all playlists.')) { await api('/media/' + id, { method:'DELETE' }); load(); } }
 
@@ -195,6 +201,36 @@ function setCell(id, col, row, deviceId) {
   const members = w.members.filter((m) => !(m.col === col && m.row === row) && m.deviceId !== deviceId);
   if (deviceId) members.push({ deviceId, col, row });
   patchWall(id, { members });
+}
+
+// ---- Alerts ----
+function renderAlerts() {
+  const paired = devices.filter((d) => d.paired);
+  return `<div class="card"><h2>Emergency alert</h2>
+    ${alertNow ? `<div class="row" style="background:${alertNow.color};color:#fff;padding:10px;border-radius:6px;margin-bottom:10px"><b class="grow">LIVE: ${esc(alertNow.message)}</b><span>until ${new Date(alertNow.until).toLocaleTimeString()}</span><button class="danger" onclick="clearAlert()">Clear now</button></div>` : '<p class="muted">No alert is showing.</p>'}
+    <div class="row"><input id="alMsg" class="grow" placeholder="Message shown full-screen on the TVs, e.g. Please leave the building calmly"></div>
+    <div class="row" style="margin-top:8px">Show for <input id="alMin" type="number" min="1" value="5"> minutes <label>Colour <input id="alColor" type="color" value="#c62828"></label></div>
+    <div style="margin-top:8px"><b>Screens</b> <small>(none ticked = all screens)</small><div class="days">${paired.map((d) => `<label><input type="checkbox" class="alDev" value="${d.id}"> ${esc(d.name)}</label>`).join('') || '<small>No screens yet.</small>'}</div></div>
+    <div class="row" style="margin-top:10px"><button class="primary" onclick="sendAlert()">Send alert now</button><small>Screens switch within a few seconds and go back to normal playback when it ends.</small></div></div>`;
+}
+async function sendAlert() { await api('/alert', { method:'POST', body:{ message: $('#alMsg').value, minutes: +$('#alMin').value, color: $('#alColor').value, deviceIds: [...document.querySelectorAll('.alDev:checked')].map((x) => x.value) } }); load(); }
+async function clearAlert() { await api('/alert', { method:'DELETE' }); load(); }
+
+// ---- Reports (proof of play) ----
+const fmtSec = (n) => n >= 3600 ? (n / 3600).toFixed(1) + ' h' : n >= 60 ? Math.round(n / 60) + ' min' : n + ' s';
+function renderReports() {
+  if (!report) return '<p class="muted">Loading…</p>';
+  const table = (rows, label) => `<table style="width:100%;border-collapse:collapse"><tr><th align="left">${label}</th><th align="right">Times shown</th><th align="right">Total time</th><th align="right">Last shown</th></tr>${rows.map((r) => `<tr style="border-top:1px solid var(--line)"><td>${esc(r.name)}</td><td align="right">${r.plays}</td><td align="right">${fmtSec(r.seconds)}</td><td align="right">${new Date(r.last).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Nothing played in this period yet.</td></tr>'}</table>`;
+  return `<div class="card"><div class="row"><h2 class="grow" style="margin:0">Proof of play</h2>
+    <select onchange="reportDays=+this.value;load()">${[1, 7, 30, 90].map((n) => `<option value="${n}" ${n === reportDays ? 'selected' : ''}>Last ${n} day${n > 1 ? 's' : ''}</option>`).join('')}</select>
+    <button onclick="downloadCsv()">Download CSV</button></div>
+    <small>Every item each screen actually showed, ${report.total} plays in this period. Use it as evidence for advertisers or compliance.</small></div>
+    <div class="card"><h2>By content</h2>${table(report.byMedia, 'Content')}</div>
+    <div class="card"><h2>By screen</h2>${table(report.byScreen, 'Screen')}</div>`;
+}
+async function downloadCsv() {
+  const r = await fetch('/api/reports/plays.csv?days=' + reportDays, { headers: { Authorization: 'Bearer ' + token } });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = `proof-of-play-${reportDays}d.csv`; a.click();
 }
 
 // ---- Playlists ----
