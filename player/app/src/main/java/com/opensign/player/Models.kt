@@ -21,6 +21,7 @@ data class Config(
     val wall: Wall? = null,
     val serverTime: Long = 0,
     val alert: Alert? = null,
+    val name: String? = null,
 ) {
     /** Items to play right now: first matching schedule slot, else the default playlist. */
     fun activePlaylist(now: Calendar = Calendar.getInstance()): Pair<String, List<Item>>? {
@@ -60,7 +61,7 @@ data class Config(
                 Wall(it.getInt("cols"), it.getInt("rows"), it.getInt("col"), it.getInt("row"), it.getString("playlistId"))
             }
             val alert = o.optJSONObject("alert")?.let { Alert(it.getString("message"), it.getString("color"), it.getLong("until")) }
-            return Config(o.getString("version"), def, slots, pls, wall, o.optLong("serverTime", 0), alert)
+            return Config(o.getString("version"), def, slots, pls, wall, o.optLong("serverTime", 0), alert, o.optString("name").takeIf { it.isNotEmpty() && it != "null" })
         }
 
         private fun toMin(hhmm: String) = hhmm.substring(0, 2).toInt() * 60 + hhmm.substring(3, 5).toInt()
