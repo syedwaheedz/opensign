@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenSign</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c2128; --muted:#6b7280; --line:#e3e6ea; --accent:#2563eb; --ok:#16a34a; --bad:#dc2626; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1216; --card:#181c22; --text:#e6e8eb; --muted:#8b93a1; --line:#2a2f37; --accent:#4f8cff; } }
+  * { box-sizing:border-box } body { margin:0; font:14px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--text) }
+  header { display:flex; align-items:center; gap:24px; padding:0 20px; height:52px; background:var(--card); border-bottom:1px solid var(--line) }
+  header b { font-size:16px } nav { display:flex; gap:4px; flex:1 }
+  nav button { background:none; border:0; padding:15px 12px; color:var(--muted); cursor:pointer; font:inherit; border-bottom:2px solid transparent }
+  nav button.on { color:var(--text); border-color:var(--accent) }
+  main { max-width:1000px; margin:20px auto; padding:0 16px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-bottom:12px }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap } .grow { flex:1 }
+  button, input, select { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:6px 10px }
+  button { cursor:pointer } button.primary { background:var(--accent); color:#fff; border-color:var(--accent) } button.danger { color:var(--bad) }
+  h2 { margin:0 0 12px; font-size:15px } .muted { color:var(--muted) } small { color:var(--muted) }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--muted); margin-right:6px } .dot.on { background:var(--ok) }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px }
+  .thumb { border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--card) }
+  .thumb .pic { height:100px; background:#000; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px }
+  .thumb img, .thumb video { width:100%; height:100%; object-fit:cover } .thumb .meta { padding:8px; font-size:12px; word-break:break-all }
+  .days label { margin-right:6px; user-select:none } input[type=number] { width:70px } input[type=time] { padding:4px 6px }
+  #login { max-width:320px; margin:20vh auto }
+</style>
+</head>
+<body>
+<div id="login" class="card" hidden>
+  <h2>OpenSign</h2>
+  <form class="row" onsubmit="login(event)">
+    <input id="pw" type="password" placeholder="Admin password" class="grow" autofocus>
+    <button class="primary">Sign in</button>
+  </form>
+  <small id="loginErr"></small>
+</div>
+<div id="app" hidden>
+  <header>
+    <b>OpenSign</b>
+    <nav>
+      <button data-tab="devices">Screens</button>
+      <button data-tab="media">Media</button>
+      <button data-tab="playlists">Playlists</button>
+    </nav>
+    <button onclick="logout()">Sign out</button>
+  </header>
+  <main id="view"></main>
+</div>
+<script>
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+let token = localStorage.getItem('token'), tab = localStorage.getItem('tab') || 'devices';
+let devices = [], media = [], playlists = [], editing = null, timer;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+async function api(path, opts = {}) {
+  const headers = { Authorization: 'Bearer ' + token };
+  if (opts.body && !(opts.body instanceof FormData)) { headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(opts.body); }
+  const r = await fetch('/api' + path, { ...opts, headers });
+  if (r.status === 401) { logout(); throw new Error('Unauthorized'); }
+  const data = await r.json();
+  if (!r.ok) { alert(data.error || 'Request failed'); throw new Error(data.error); }
+  return data;
+}
+async function login(e) {
+  e.preventDefault();
+  const r = await fetch('/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: $('#pw').value }) });
+  if (!r.ok) { $('#loginErr').textContent = 'Wrong password'; return; }
+  token = (await r.json()).token; localStorage.setItem('token', token); start();
+}
+function logout() { localStorage.removeItem('token'); token = null; clearInterval(timer); $('#app').hidden = true; $('#login').hidden = false; }
+async function load() {
+  [devices, media, playlists] = await Promise.all([api('/devices'), api('/media'), api('/playlists')]);
+  render();
+}
+function start() {
+  $('#login').hidden = true; $('#app').hidden = false;
+  document.querySelectorAll('nav button').forEach((b) => b.onclick = () => { tab = b.dataset.tab; editing = null; localStorage.setItem('tab', tab); render(); });
+  load(); clearInterval(timer);
+  timer = setInterval(() => { if (tab === 'devices' && !document.activeElement.closest('#view')) load(); }, 15000);
+}
+function render() {
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  $('#view').innerHTML = { devices: renderDevices, media: renderMedia, playlists: renderPlaylists }[tab]();
+}
+const plOptions = (sel) => '<option value="">— none —</option>' + playlists.map((p) => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+
+// ---- Screens ----
+function renderDevices() {
+  const now = Date.now();
+  return `<div class="card"><h2>Add a screen</h2><div class="row">
+    <input id="claimCode" placeholder="6-digit code shown on the TV" maxlength="6">
+    <input id="claimName" placeholder="Screen name (e.g. Lobby)" class="grow">
+    <button class="primary" onclick="claim()">Add</button></div></div>` +
+    (devices.length ? '' : '<p class="muted">No screens yet. Install the player on an Android TV and enter the code it shows.</p>') +
+    devices.map((d) => {
+      if (!d.paired) return `<div class="card row"><span class="grow"><span class="dot"></span>Waiting to pair: <b>${d.pairingCode}</b> <small>${esc(d.model)}</small></span><button class="danger" onclick="delDevice('${d.id}')">Remove</button></div>`;
+      const online = d.lastSeen && now - d.lastSeen < 150000;
+      return `<div class="card"><div class="row">
+        <span class="grow"><span class="dot ${online ? 'on' : ''}"></span><b>${esc(d.name)}</b>
+        <small>${online ? 'online' : d.lastSeen ? 'last seen ' + new Date(d.lastSeen).toLocaleString() : 'never connected'}${d.nowPlaying ? ' · playing: ' + esc(d.nowPlaying) : ''}</small></span>
+        <button onclick="rename('${d.id}')">Rename</button><button onclick="refreshDevice('${d.id}')">Refresh</button><button class="danger" onclick="delDevice('${d.id}')">Remove</button></div>
+        <div class="row" style="margin-top:10px"><span>Default playlist</span>
+          <select onchange="setDefault('${d.id}', this.value)">${plOptions(d.defaultPlaylistId)}</select>
+          <button onclick="addSlot('${d.id}')">+ Schedule slot</button></div>
+        ${d.schedule.map((s, i) => `<div class="row days" style="margin-top:8px">
+          <select onchange="editSlot('${d.id}',${i},'playlistId',this.value)">${plOptions(s.playlistId)}</select>
+          <input type="time" value="${s.start}" onchange="editSlot('${d.id}',${i},'start',this.value)"> –
+          <input type="time" value="${s.end}" onchange="editSlot('${d.id}',${i},'end',this.value)">
+          ${DAYS.map((n, di) => `<label><input type="checkbox" ${s.days.includes(di) ? 'checked' : ''} onchange="toggleDay('${d.id}',${i},${di},this.checked)">${n}</label>`).join('')}
+          <button class="danger" onclick="delSlot('${d.id}',${i})">✕</button></div>`).join('')}
+        ${d.schedule.length ? '<small>Slots override the default playlist during their time window (first match wins; windows may cross midnight).</small>' : ''}
+      </div>`;
+    }).join('');
+}
+const dev = (id) => devices.find((d) => d.id === id);
+const saveDev = async (d) => { await api('/devices/' + d.id, { method:'PUT', body: d }); load(); };
+async function claim() { await api('/devices/claim', { method:'POST', body:{ code: $('#claimCode').value, name: $('#claimName').value } }); load(); }
+function rename(id) { const n = prompt('Screen name', dev(id).name); if (n) { dev(id).name = n; saveDev(dev(id)); } }
+async function refreshDevice(id) { await api(`/devices/${id}/refresh`, { method:'POST' }); load(); }
+async function delDevice(id) { if (confirm('Remove this screen?')) { await api('/devices/' + id, { method:'DELETE' }); load(); } }
+function setDefault(id, v) { dev(id).defaultPlaylistId = v; saveDev(dev(id)); }
+function addSlot(id) { if (!playlists.length) return alert('Create a playlist first'); const d = dev(id); d.schedule.push({ playlistId: playlists[0].id, days:[0,1,2,3,4,5,6], start:'09:00', end:'17:00' }); saveDev(d); }
+function editSlot(id, i, k, v) { const d = dev(id); d.schedule[i][k] = v; saveDev(d); }
+function toggleDay(id, i, day, on) { const d = dev(id), s = d.schedule[i]; s.days = on ? [...new Set([...s.days, day])] : s.days.filter((x) => x !== day); saveDev(d); }
+function delSlot(id, i) { const d = dev(id); d.schedule.splice(i, 1); saveDev(d); }
+
+// ---- Media ----
+function renderMedia() {
+  return `<div class="card"><h2>Upload</h2><div class="row">
+    <input id="files" type="file" multiple accept="image/*,video/*"><button class="primary" onclick="uploadFiles()">Upload</button>
+    <span class="grow"></span><input id="webName" placeholder="Name"><input id="webUrl" placeholder="https://… web page" ><button onclick="addWeb()">Add web page</button></div></div>
+    <div class="grid">${media.map((m) => `<div class="thumb"><div class="pic">${
+      m.type === 'image' ? `<img src="/media/${m.file}" loading="lazy">` : m.type === 'video' ? `<video src="/media/${m.file}#t=0.5" preload="metadata" muted></video>` : '🌐 web page'}</div>
+      <div class="meta">${esc(m.name)}<br><small>${m.type}${m.size ? ' · ' + (m.size / 1048576).toFixed(1) + ' MB' : ''}</small>
+      <br><button class="danger" onclick="delMedia('${m.id}')">Delete</button></div></div>`).join('') || '<p class="muted">No media yet.</p>'}</div>`;
+}
+async function uploadFiles() {
+  const f = $('#files').files; if (!f.length) return;
+  const fd = new FormData(); for (const x of f) fd.append('files', x);
+  await api('/media', { method:'POST', body: fd }); load();
+}
+async function addWeb() { await api('/media/web', { method:'POST', body:{ name: $('#webName').value, url: $('#webUrl').value } }); load(); }
+async function delMedia(id) { if (confirm('Delete this media? It is removed from all playlists.')) { await api('/media/' + id, { method:'DELETE' }); load(); } }
+
+// ---- Playlists ----
+function renderPlaylists() {
+  const p = playlists.find((x) => x.id === editing);
+  if (!p) return `<div class="card"><div class="row"><input id="plName" placeholder="New playlist name" class="grow"><button class="primary" onclick="newPlaylist()">Create</button></div></div>` +
+    playlists.map((x) => `<div class="card row"><b class="grow">${esc(x.name)} <small>${x.items.length} items</small></b><button onclick="editing='${x.id}';render()">Edit</button><button class="danger" onclick="delPlaylist('${x.id}')">Delete</button></div>`).join('');
+  return `<div class="card"><div class="row"><button onclick="editing=null;load()">← Back</button><input id="plTitle" value="${esc(p.name)}" class="grow"><button class="primary" onclick="savePlaylist()">Save</button></div></div>
+    <div class="card" id="items">${p.items.map((it, i) => { const m = media.find((x) => x.id === it.mediaId); return `<div class="row" style="margin-bottom:6px">
+      <span class="grow">${i + 1}. ${esc(m?.name || '(missing)')} <small>${m?.type || ''}</small></span>
+      ${m?.type === 'video' ? '<small>plays full length</small>' : `<input type="number" min="1" value="${it.duration}" onchange="editing_items()[${i}].duration=+this.value"> s`}
+      <button onclick="moveItem(${i},-1)">↑</button><button onclick="moveItem(${i},1)">↓</button><button class="danger" onclick="removeItem(${i})">✕</button></div>`; }).join('') || '<p class="muted">Empty playlist. Add media below.</p>'}</div>
+    <div class="card row"><select id="addMedia" class="grow">${media.map((m) => `<option value="${m.id}">${esc(m.name)} (${m.type})</option>`).join('')}</select><button onclick="addItem()">+ Add to playlist</button></div>`;
+}
+const editing_items = () => playlists.find((x) => x.id === editing).items;
+function addItem() { const id = $('#addMedia').value; if (id) { editing_items().push({ mediaId: id, duration: 10 }); render(); } }
+function removeItem(i) { editing_items().splice(i, 1); render(); }
+function moveItem(i, d) { const a = editing_items(); if (a[i + d]) { [a[i], a[i + d]] = [a[i + d], a[i]]; render(); } }
+async function savePlaylist() { const p = playlists.find((x) => x.id === editing); await api('/playlists/' + p.id, { method:'PUT', body:{ name: $('#plTitle').value, items: p.items } }); editing = null; load(); }
+async function newPlaylist() { const p = await api('/playlists', { method:'POST', body:{ name: $('#plName').value } }); await load(); editing = p.id; render(); }
+async function delPlaylist(id) { if (confirm('Delete playlist?')) { await api('/playlists/' + id, { method:'DELETE' }); load(); } }
+
+if (token) start(); else $('#login').hidden = false;
+</script>
+</body>
+</html>

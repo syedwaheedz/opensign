@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF0B1220"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="64dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="OpenSign server address"
+        android:textColor="@android:color/white"
+        android:textSize="28sp" />
+
+    <EditText
+        android:id="@+id/serverInput"
+        android:layout_width="600dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:hint="http://192.168.1.10:3000"
+        android:imeOptions="actionDone"
+        android:inputType="textUri"
+        android:singleLine="true"
+        android:textColor="@android:color/white"
+        android:textColorHint="#80FFFFFF"
+        android:textSize="24sp" />
+
+    <Button
+        android:id="@+id/saveButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="Connect" />
+</LinearLayout>
