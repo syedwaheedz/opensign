@@ -28,6 +28,7 @@ The TV updates within a minute. It keeps playing if the Wi-Fi drops, and starts 
 
 ## Good to know
 - **Links need internet on the TV.** Instagram and Facebook only show *public* posts. YouTube plays muted.
+- **Video plus a ticker, or ads on the side:** use the **Layouts** tab, then pick the layout for your screen.
 - **Several TVs as one big screen:** use the **Video walls** tab.
 - **TV stuck on "Looking for your OpenSign server"?**
   1. Check the OpenSign window is still open on the computer.

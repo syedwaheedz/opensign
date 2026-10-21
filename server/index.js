@@ -18,7 +18,7 @@ const PLAYS_FILE = path.join(DATA_DIR, 'plays.ndjson'); // append-only proof-of-
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 // ---- tiny JSON store -------------------------------------------------------
-let db = { devices: [], media: [], playlists: [], walls: [], admin: null, alert: null };
+let db = { devices: [], media: [], playlists: [], walls: [], layouts: [], admin: null, alert: null };
 if (fs.existsSync(DB_FILE)) db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) };
 function save() {
   const tmp = DB_FILE + '.tmp';
@@ -129,12 +129,12 @@ function widgetPage(w) {
 html,body{margin:0;height:100%;overflow:hidden;background:${w.bg};color:${w.fg};font-family:system-ui,sans-serif}
 .c{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4vw;box-sizing:border-box}`;
   if (w.kind === 'clock') {
-    return head + `.t{font-size:22vw;font-weight:700;line-height:1}.d{font-size:5vw;opacity:.8;margin-top:2vw}</style>
+    return head + `.t{font-size:min(22vw,36vh);font-weight:700;line-height:1}.d{font-size:min(5vw,8vh);opacity:.8;margin-top:1vh}</style>
 <div class="c"><div class="t" id="t"></div><div class="d" id="d"></div></div>
 <script>function u(){const n=new Date();t.textContent=n.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});d.textContent=n.toLocaleDateString([],{weekday:'long',day:'numeric',month:'long',year:'numeric'})}u();setInterval(u,1000)</script>`;
   }
   if (w.kind === 'ticker') {
-    return head + `.m{white-space:nowrap;font-size:14vh;font-weight:700;animation:s 18s linear infinite;padding-left:100vw}
+    return head + `.m{white-space:nowrap;font-size:60vh;line-height:1;font-weight:700;animation:s 18s linear infinite;padding-left:100vw}
 @keyframes s{to{transform:translateX(-100%)}}.c{padding:0}</style><div class="c" style="justify-content:center"><div class="m" id="m">${esc(w.text)}</div></div>
 <script>m.style.animationDuration=Math.max(10,m.textContent.length*0.35)+'s'</script>`;
   }
@@ -183,6 +183,14 @@ function alertFor(d) {
 function buildConfig(req, d) {
   const wall = wallFor(d);
   const playlistIds = new Set(wall ? [wall.playlistId] : [d.defaultPlaylistId, ...d.schedule.map((s) => s.playlistId)].filter(Boolean));
+  // A screen's default/slot id may point to a layout; its zones pull in their own playlists.
+  const layouts = {};
+  for (const id of [...playlistIds]) {
+    const l = db.layouts.find((x) => x.id === id);
+    if (!l) continue;
+    layouts[id] = { id, name: l.name, zones: l.zones.map(({ x, y, w, h, playlistId }) => ({ x, y, w, h, playlistId })) };
+    for (const z of l.zones) if (z.playlistId) playlistIds.add(z.playlistId);
+  }
   const playlists = {};
   for (const pid of playlistIds) {
     const p = db.playlists.find((x) => x.id === pid);
@@ -201,7 +209,7 @@ function buildConfig(req, d) {
   }
   const body = {
     rev: d.rev, name: d.name, defaultPlaylistId: d.defaultPlaylistId, wall, alert: alertFor(d),
-    schedule: wall ? [] : d.schedule.filter((s) => playlists[s.playlistId]), playlists,
+    schedule: wall ? [] : d.schedule.filter((s) => playlists[s.playlistId] || layouts[s.playlistId]), playlists, layouts,
   };
   const version = crypto.createHash('sha1').update(JSON.stringify(body)).digest('hex').slice(0, 12);
   // serverTime is outside the version hash; players use it to sync wall playback across screens.
@@ -309,6 +317,7 @@ api.put('/playlists/:id', (req, res) => {
 api.delete('/playlists/:id', (req, res) => {
   db.playlists = db.playlists.filter((x) => x.id !== req.params.id);
   for (const w of db.walls) if (w.playlistId === req.params.id) { w.playlistId = null; w.enabled = false; }
+  for (const l of db.layouts) for (const z of l.zones) if (z.playlistId === req.params.id) z.playlistId = null;
   for (const d of db.devices) {
     if (d.defaultPlaylistId === req.params.id) d.defaultPlaylistId = null;
     d.schedule = d.schedule.filter((s) => s.playlistId !== req.params.id);
@@ -346,6 +355,47 @@ api.put('/walls/:id', (req, res) => {
 });
 api.delete('/walls/:id', (req, res) => {
   db.walls = db.walls.filter((x) => x.id !== req.params.id);
+  bumpAll();
+  res.json({ ok: true });
+});
+
+// ---- layouts: split the screen into zones, each playing its own playlist ----
+const pct = (v, lo, hi, d) => Math.min(hi, Math.max(lo, Number.isFinite(Number(v)) ? Math.round(Number(v) * 10) / 10 : d));
+function cleanZones(zones) {
+  return (Array.isArray(zones) ? zones : []).slice(0, 8).map((z, i) => {
+    const x = pct(z.x, 0, 95, 0), y = pct(z.y, 0, 95, 0);
+    return {
+      id: String(z.id || uid()), name: String(z.name || `Zone ${i + 1}`).slice(0, 40), x, y,
+      w: pct(z.w, 5, 100 - x, 100 - x), h: pct(z.h, 5, 100 - y, 100 - y),
+      playlistId: z.playlistId && db.playlists.some((p) => p.id === z.playlistId) ? z.playlistId : null,
+    };
+  });
+}
+api.get('/layouts', (_req, res) => res.json(db.layouts));
+api.post('/layouts', (req, res) => {
+  const zones = cleanZones(req.body?.zones?.length ? req.body.zones : [{ name: 'Main', x: 0, y: 0, w: 100, h: 100 }]);
+  const l = { id: uid(), name: String(req.body?.name || 'New layout').slice(0, 60), zones };
+  db.layouts.push(l);
+  save();
+  res.json(l);
+});
+api.put('/layouts/:id', (req, res) => {
+  const l = db.layouts.find((x) => x.id === req.params.id);
+  if (!l) return res.status(404).json({ error: 'not found' });
+  if (typeof req.body.name === 'string') l.name = req.body.name.slice(0, 60);
+  if (Array.isArray(req.body.zones)) {
+    if (!req.body.zones.length) return res.status(400).json({ error: 'A layout needs at least one zone' });
+    l.zones = cleanZones(req.body.zones);
+  }
+  bumpAll();
+  res.json(l);
+});
+api.delete('/layouts/:id', (req, res) => {
+  db.layouts = db.layouts.filter((x) => x.id !== req.params.id);
+  for (const d of db.devices) {
+    if (d.defaultPlaylistId === req.params.id) d.defaultPlaylistId = null;
+    d.schedule = d.schedule.filter((s) => s.playlistId !== req.params.id);
+  }
   bumpAll();
   res.json({ ok: true });
 });

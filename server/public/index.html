@@ -49,6 +49,7 @@
       <button data-tab="devices">Screens</button>
       <button data-tab="media">Media</button>
       <button data-tab="playlists">Playlists</button>
+      <button data-tab="layouts">Layouts</button>
       <button data-tab="walls">Video walls</button>
       <button data-tab="alerts">Alerts</button>
       <button data-tab="reports">Reports</button>
@@ -60,7 +61,7 @@
 <script>
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 let token = localStorage.getItem('token'), tab = localStorage.getItem('tab') || 'devices';
-let devices = [], media = [], playlists = [], walls = [], alertNow = null, report = null, reportDays = 7, editing = null, timer;
+let devices = [], media = [], playlists = [], walls = [], layouts = [], alertNow = null, report = null, reportDays = 7, editing = null, timer;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
@@ -90,7 +91,7 @@ async function login(e) {
 }
 function logout() { localStorage.removeItem('token'); token = null; clearInterval(timer); $('#app').hidden = true; showLogin(); }
 async function load() {
-  [devices, media, playlists, walls, alertNow] = await Promise.all([api('/devices'), api('/media'), api('/playlists'), api('/walls'), api('/alert')]);
+  [devices, media, playlists, walls, alertNow, layouts] = await Promise.all([api('/devices'), api('/media'), api('/playlists'), api('/walls'), api('/alert'), api('/layouts')]);
   if (tab === 'reports') report = await api('/reports/plays?days=' + reportDays);
   render();
 }
@@ -102,9 +103,10 @@ function start() {
 }
 function render() {
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  $('#view').innerHTML = { devices: renderDevices, media: renderMedia, playlists: renderPlaylists, walls: renderWalls, alerts: renderAlerts, reports: renderReports }[tab]();
+  $('#view').innerHTML = { devices: renderDevices, media: renderMedia, playlists: renderPlaylists, walls: renderWalls, layouts: renderLayouts, alerts: renderAlerts, reports: renderReports }[tab]();
 }
 const plOptions = (sel) => '<option value="">— none —</option>' + playlists.map((p) => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+const contentOptions = (sel) => plOptions(sel).replace('</option>', '</option>') + layouts.map((l) => `<option value="${l.id}" ${l.id === sel ? 'selected' : ''}>▦ ${esc(l.name)} (layout)</option>`).join('');
 
 // ---- Screens ----
 function renderDevices() {
@@ -121,11 +123,11 @@ function renderDevices() {
         <span class="grow"><span class="dot ${online ? 'on' : ''}"></span><b>${esc(d.name)}</b>
         <small>${online ? 'online' : d.lastSeen ? 'last seen ' + new Date(d.lastSeen).toLocaleString() : 'never connected'}${d.nowPlaying ? ' · playing: ' + esc(d.nowPlaying) : ''}</small></span>
         <button onclick="rename('${d.id}')">Rename</button><button onclick="refreshDevice('${d.id}')">Refresh</button><button class="danger" onclick="delDevice('${d.id}')">Remove</button></div>
-        <div class="row" style="margin-top:10px"><span>Default playlist</span>
-          <select onchange="setDefault('${d.id}', this.value)">${plOptions(d.defaultPlaylistId)}</select>
+        <div class="row" style="margin-top:10px"><span>Default content</span>
+          <select onchange="setDefault('${d.id}', this.value)">${contentOptions(d.defaultPlaylistId)}</select>
           <button onclick="addSlot('${d.id}')">+ Schedule slot</button></div>
         ${d.schedule.map((s, i) => `<div class="row days" style="margin-top:8px">
-          <select onchange="editSlot('${d.id}',${i},'playlistId',this.value)">${plOptions(s.playlistId)}</select>
+          <select onchange="editSlot('${d.id}',${i},'playlistId',this.value)">${contentOptions(s.playlistId)}</select>
           <input type="time" value="${s.start}" onchange="editSlot('${d.id}',${i},'start',this.value)"> –
           <input type="time" value="${s.end}" onchange="editSlot('${d.id}',${i},'end',this.value)">
           ${DAYS.map((n, di) => `<label><input type="checkbox" ${s.days.includes(di) ? 'checked' : ''} onchange="toggleDay('${d.id}',${i},${di},this.checked)">${n}</label>`).join('')}
@@ -142,7 +144,7 @@ function rename(id) { const n = prompt('Screen name', dev(id).name); if (n) { de
 async function refreshDevice(id) { await api(`/devices/${id}/refresh`, { method:'POST' }); load(); }
 async function delDevice(id) { if (confirm('Remove this screen?')) { await api('/devices/' + id, { method:'DELETE' }); load(); } }
 function setDefault(id, v) { dev(id).defaultPlaylistId = v; saveDev(dev(id)); }
-function addSlot(id) { if (!playlists.length) return alert('Create a playlist first'); const d = dev(id); d.schedule.push({ playlistId: playlists[0].id, days:[0,1,2,3,4,5,6], start:'09:00', end:'17:00' }); saveDev(d); }
+function addSlot(id) { if (!playlists.length && !layouts.length) return alert('Create a playlist first'); const d = dev(id); d.schedule.push({ playlistId: (playlists[0] || layouts[0]).id, days:[0,1,2,3,4,5,6], start:'09:00', end:'17:00' }); saveDev(d); }
 function editSlot(id, i, k, v) { const d = dev(id); d.schedule[i][k] = v; saveDev(d); }
 function toggleDay(id, i, day, on) { const d = dev(id), s = d.schedule[i]; s.days = on ? [...new Set([...s.days, day])] : s.days.filter((x) => x !== day); saveDev(d); }
 function delSlot(id, i) { const d = dev(id); d.schedule.splice(i, 1); saveDev(d); }
@@ -202,6 +204,48 @@ function setCell(id, col, row, deviceId) {
   if (deviceId) members.push({ deviceId, col, row });
   patchWall(id, { members });
 }
+
+// ---- Layouts (multi-zone) ----
+const PRESETS = {
+  'Full screen': [['Main', 0, 0, 100, 100]],
+  'Main + bottom ticker': [['Main', 0, 0, 100, 85], ['Ticker', 0, 85, 100, 15]],
+  'Main + right sidebar': [['Main', 0, 0, 75, 100], ['Sidebar', 75, 0, 25, 100]],
+  'Split 50 / 50': [['Left', 0, 0, 50, 100], ['Right', 50, 0, 50, 100]],
+  'Main + sidebar + ticker': [['Main', 0, 0, 75, 85], ['Sidebar', 75, 0, 25, 100], ['Ticker', 0, 85, 75, 15]],
+  'Left ad + main': [['Ad', 0, 0, 25, 100], ['Main', 25, 0, 75, 100]],
+  'Ad | video | ad': [['Left ad', 0, 0, 20, 100], ['Video', 20, 0, 60, 100], ['Right ad', 80, 0, 20, 100]],
+  'Banner + main + ticker': [['Banner', 0, 0, 100, 12], ['Main', 0, 12, 100, 73], ['Ticker', 0, 85, 100, 15]],
+  'Four quarters': [['Top left', 0, 0, 50, 50], ['Top right', 50, 0, 50, 50], ['Bottom left', 0, 50, 50, 50], ['Bottom right', 50, 50, 50, 50]],
+};
+const ZCOLORS = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2', '#65a30d', '#db2777'];
+function renderLayouts() {
+  const l = layouts.find((x) => x.id === editing);
+  if (!l) return `<div class="card"><h2>New layout</h2><div class="row"><input id="lyName" placeholder="Layout name" class="grow">
+      <select id="lyPreset">${Object.keys(PRESETS).map((n) => `<option>${n}</option>`).join('')}</select><button class="primary" onclick="newLayout()">Create</button></div>
+      <small>A layout splits the screen into zones; each zone plays its own playlist (e.g. promo video + news ticker + clock). Then pick the layout for a screen under Screens.</small></div>` +
+    layouts.map((x) => `<div class="card row"><b class="grow">${esc(x.name)} <small>${x.zones.length} zone${x.zones.length > 1 ? 's' : ''}</small></b><button onclick="editing='${x.id}';render()">Edit</button><button class="danger" onclick="delLayout('${x.id}')">Delete</button></div>`).join('');
+  return `<div class="card"><div class="row"><button onclick="editing=null;load()">← Back</button><input id="lyTitle" value="${esc(l.name)}" class="grow"><button class="primary" onclick="saveLayout()">Save</button></div></div>
+    <div class="card"><div style="position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:6px;overflow:hidden">${l.zones.map((z, i) =>
+      `<div style="position:absolute;left:${z.x}%;top:${z.y}%;width:${z.w}%;height:${z.h}%;background:${ZCOLORS[i % 8]}44;border:2px solid ${ZCOLORS[i % 8]};box-sizing:border-box;color:#fff;font-size:12px;padding:4px;overflow:hidden">${esc(z.name)}<br>${esc(playlists.find((p) => p.id === z.playlistId)?.name || 'no playlist')}</div>`).join('')}</div></div>
+    ${l.zones.map((z, i) => `<div class="card"><div class="row"><b style="color:${ZCOLORS[i % 8]}">■</b><input value="${esc(z.name)}" onchange="zone(${i}).name=this.value;render()" class="grow">
+      <select onchange="zone(${i}).playlistId=this.value||null;render()">${plOptions(z.playlistId)}</select>
+      <button class="danger" onclick="removeZone(${i})">✕</button></div>
+      <div class="row" style="margin-top:8px"><small>Left %</small><input type="number" min="0" max="95" value="${z.x}" onchange="zone(${i}).x=+this.value;render()">
+      <small>Top %</small><input type="number" min="0" max="95" value="${z.y}" onchange="zone(${i}).y=+this.value;render()">
+      <small>Width %</small><input type="number" min="5" max="100" value="${z.w}" onchange="zone(${i}).w=+this.value;render()">
+      <small>Height %</small><input type="number" min="5" max="100" value="${z.h}" onchange="zone(${i}).h=+this.value;render()"></div></div>`).join('')}
+    <div class="row"><button onclick="addZone()">+ Add zone</button><small>Zones may overlap; later zones draw on top. Use one video zone where possible – TVs have limited video decoders.</small></div>`;
+}
+const zone = (i) => layouts.find((x) => x.id === editing).zones[i];
+function addZone() { const l = layouts.find((x) => x.id === editing); if (l.zones.length < 8) { l.zones.push({ name: 'Zone ' + (l.zones.length + 1), x: 10, y: 10, w: 40, h: 40, playlistId: null }); render(); } }
+function removeZone(i) { const l = layouts.find((x) => x.id === editing); if (l.zones.length > 1) { l.zones.splice(i, 1); render(); } }
+async function newLayout() {
+  const zones = PRESETS[$('#lyPreset').value].map(([name, x, y, w, h]) => ({ name, x, y, w, h }));
+  const l = await api('/layouts', { method:'POST', body:{ name: $('#lyName').value || $('#lyPreset').value, zones } });
+  await load(); editing = l.id; render();
+}
+async function saveLayout() { const l = layouts.find((x) => x.id === editing); await api('/layouts/' + l.id, { method:'PUT', body:{ name: $('#lyTitle').value, zones: l.zones } }); editing = null; load(); }
+async function delLayout(id) { if (confirm('Delete this layout? Screens using it lose that content.')) { await api('/layouts/' + id, { method:'DELETE' }); load(); } }
 
 // ---- Alerts ----
 function renderAlerts() {
