@@ -33,6 +33,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -49,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var imageView: ImageView
     private lateinit var webView: WebView
     private lateinit var statusView: TextView
+    private lateinit var zoneContainer: FrameLayout
     private lateinit var alertView: TextView
     private val pendingPlays = ConcurrentLinkedQueue<JSONObject>() // proof-of-play, sent with the next heartbeat
     private lateinit var setupButton: Button
@@ -78,6 +81,7 @@ class MainActivity : AppCompatActivity() {
         imageView = findViewById(R.id.imageView)
         webView = findViewById(R.id.webView)
         statusView = findViewById(R.id.statusView)
+        zoneContainer = findViewById(R.id.zoneContainer)
         alertView = findViewById(R.id.alertView)
         setupButton = findViewById(R.id.setupButton)
         setupButton.setOnClickListener { openSetup() } // works with a mouse, touch or the remote's OK
@@ -265,6 +269,11 @@ class MainActivity : AppCompatActivity() {
         var index = 0
         while (root.width == 0) delay(50) // wait for first layout so wall tiles are sized correctly
         while (true) {
+            val layout = config?.activeLayout()
+            if (layout != null) {
+                runLayout(layout)
+                continue
+            }
             val active = config?.activePlaylist()
             if (active == null || active.second.isEmpty()) {
                 nowPlaying = null
@@ -315,13 +324,92 @@ class MainActivity : AppCompatActivity() {
                 job.join() // "Next" cancels only this child, so the loop moves on to the following item
             }
             itemJob = null
-            val shownMs = System.currentTimeMillis() - startedAt
-            if (shownMs >= 1_000 && pendingPlays.size < 2_000) {
-                pendingPlays.add(
-                    JSONObject().put("itemId", item.id).put("name", item.name)
-                        .put("start", startedAt + clockOffset).put("ms", shownMs)
-                )
+            recordPlay(item, startedAt)
+            // An item that fails instantly (bad file) must not spin the loop. Wall items may be legitimately short.
+            if (wall == null && System.currentTimeMillis() - startedAt < 500) delay(1_000)
+        }
+    }
+
+    private fun recordPlay(item: Item, startedAt: Long, endedAt: Long = System.currentTimeMillis()) {
+        val shownMs = endedAt - startedAt
+        if (shownMs >= 1_000 && pendingPlays.size < 2_000) {
+            pendingPlays.add(
+                JSONObject().put("itemId", item.id).put("name", item.name)
+                    .put("start", startedAt + clockOffset).put("ms", shownMs)
+            )
+        }
+    }
+
+    /**
+     * Multi-zone layout: one ZonePlayer per rectangle, each looping its own playlist.
+     * Returns when the config or the active content changes, so the caller can rebuild.
+     */
+    private suspend fun runLayout(layout: Layout) {
+        val cfg = config ?: return
+        applyWall(null) // layouts are not combined with video walls
+        val w = root.width
+        val h = root.height
+        val players = layout.zones.map { ZonePlayer(this, cache) }
+        zoneContainer.removeAllViews()
+        layout.zones.forEachIndexed { i, z ->
+            val lp = FrameLayout.LayoutParams((w * z.w / 100f).toInt(), (h * z.h / 100f).toInt())
+            lp.leftMargin = (w * z.x / 100f).toInt()
+            lp.topMargin = (h * z.y / 100f).toInt()
+            zoneContainer.addView(players[i].container, lp)
+        }
+        show(zoneContainer)
+        try {
+            coroutineScope {
+                layout.zones.forEachIndexed { i, z ->
+                    launch { zoneLoop(players[i], z.playlistId?.let { cfg.playlists[it] }.orEmpty(), i == 0) }
+                }
+                while (config?.version == cfg.version && config?.activeLayout()?.id == layout.id) delay(500)
+                coroutineContext.cancelChildren()
             }
+        } finally {
+            players.forEach { it.release() }
+            zoneContainer.removeAllViews()
+        }
+    }
+
+    private suspend fun zoneLoop(zone: ZonePlayer, items: List<Item>, primary: Boolean) {
+        if (items.isEmpty()) awaitCancellation() // empty zone stays black
+        // A lone image/web page stays loaded (a ticker must not restart its scroll every cycle).
+        if (items.size == 1 && items[0].type != "video") {
+            val item = items[0]
+            if (primary) nowPlaying = item.name
+            zone.display(item)
+            while (true) {
+                val startedAt = System.currentTimeMillis()
+                delay(item.duration * 1000L)
+                recordPlay(item, startedAt)
+            }
+        }
+        if (items.size == 1) {
+            val item = items[0]
+            if (primary) nowPlaying = item.name
+            zone.loopVideo(item)
+            while (true) {
+                val startedAt = System.currentTimeMillis()
+                delay(item.duration.coerceAtLeast(30) * 1000L)
+                recordPlay(item, startedAt)
+            }
+        }
+        var index = 0
+        while (true) {
+            val item = items[index % items.size]
+            index++
+            if (primary) nowPlaying = item.name
+            val startedAt = System.currentTimeMillis()
+            try {
+                if (item.type == "video") zone.playVideo(item) else { zone.display(item); delay(item.duration * 1000L) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                delay(2_000)
+            }
+            recordPlay(item, startedAt)
+            if (System.currentTimeMillis() - startedAt < 500) delay(1_000)
         }
     }
 
@@ -376,7 +464,7 @@ class MainActivity : AppCompatActivity() {
     // ---- renderers ----------------------------------------------------------
 
     private fun show(view: View) {
-        for (v in listOf<View>(playerView, imageView, webView, statusView)) v.visibility = if (v === view) View.VISIBLE else View.GONE
+        for (v in listOf<View>(playerView, imageView, webView, zoneContainer, statusView)) v.visibility = if (v === view) View.VISIBLE else View.GONE
         setupButton.visibility = statusView.visibility
         if (statusView.visibility == View.VISIBLE && !setupButton.hasFocus()) setupButton.requestFocus()
     }

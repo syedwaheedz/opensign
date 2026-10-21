@@ -129,12 +129,12 @@ function widgetPage(w) {
 html,body{margin:0;height:100%;overflow:hidden;background:${w.bg};color:${w.fg};font-family:system-ui,sans-serif}
 .c{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4vw;box-sizing:border-box}`;
   if (w.kind === 'clock') {
-    return head + `.t{font-size:22vw;font-weight:700;line-height:1}.d{font-size:5vw;opacity:.8;margin-top:2vw}</style>
+    return head + `.t{font-size:min(22vw,36vh);font-weight:700;line-height:1}.d{font-size:min(5vw,8vh);opacity:.8;margin-top:1vh}</style>
 <div class="c"><div class="t" id="t"></div><div class="d" id="d"></div></div>
 <script>function u(){const n=new Date();t.textContent=n.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});d.textContent=n.toLocaleDateString([],{weekday:'long',day:'numeric',month:'long',year:'numeric'})}u();setInterval(u,1000)</script>`;
   }
   if (w.kind === 'ticker') {
-    return head + `.m{white-space:nowrap;font-size:14vh;font-weight:700;animation:s 18s linear infinite;padding-left:100vw}
+    return head + `.m{white-space:nowrap;font-size:60vh;line-height:1;font-weight:700;animation:s 18s linear infinite;padding-left:100vw}
 @keyframes s{to{transform:translateX(-100%)}}.c{padding:0}</style><div class="c" style="justify-content:center"><div class="m" id="m">${esc(w.text)}</div></div>
 <script>m.style.animationDuration=Math.max(10,m.textContent.length*0.35)+'s'</script>`;
   }
