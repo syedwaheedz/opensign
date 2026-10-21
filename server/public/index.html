@@ -23,6 +23,11 @@
   .thumb { border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--card) }
   .thumb .pic { height:100px; background:#000; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px }
   .thumb img, .thumb video { width:100%; height:100%; object-fit:cover } .thumb .meta { padding:8px; font-size:12px; word-break:break-all }
+  .switch { display:inline-flex; align-items:center; gap:8px; cursor:pointer }
+  .switch input { appearance:none; width:38px; height:22px; border-radius:11px; background:var(--line); position:relative; padding:0; cursor:pointer; transition:.15s }
+  .switch input::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:.15s }
+  .switch input:checked { background:var(--ok) } .switch input:checked::after { left:18px }
+  .wall { display:grid; gap:6px; margin-top:10px } .wall select { width:100%; min-width:0 }
   .days label { margin-right:6px; user-select:none } input[type=number] { width:70px } input[type=time] { padding:4px 6px }
   #login { max-width:320px; margin:20vh auto }
 </style>
@@ -43,6 +48,7 @@
       <button data-tab="devices">Screens</button>
       <button data-tab="media">Media</button>
       <button data-tab="playlists">Playlists</button>
+      <button data-tab="walls">Video walls</button>
     </nav>
     <button onclick="logout()">Sign out</button>
   </header>
@@ -51,7 +57,7 @@
 <script>
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 let token = localStorage.getItem('token'), tab = localStorage.getItem('tab') || 'devices';
-let devices = [], media = [], playlists = [], editing = null, timer;
+let devices = [], media = [], playlists = [], walls = [], editing = null, timer;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
@@ -72,7 +78,7 @@ async function login(e) {
 }
 function logout() { localStorage.removeItem('token'); token = null; clearInterval(timer); $('#app').hidden = true; $('#login').hidden = false; }
 async function load() {
-  [devices, media, playlists] = await Promise.all([api('/devices'), api('/media'), api('/playlists')]);
+  [devices, media, playlists, walls] = await Promise.all([api('/devices'), api('/media'), api('/playlists'), api('/walls')]);
   render();
 }
 function start() {
@@ -83,7 +89,7 @@ function start() {
 }
 function render() {
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  $('#view').innerHTML = { devices: renderDevices, media: renderMedia, playlists: renderPlaylists }[tab]();
+  $('#view').innerHTML = { devices: renderDevices, media: renderMedia, playlists: renderPlaylists, walls: renderWalls }[tab]();
 }
 const plOptions = (sel) => '<option value="">— none —</option>' + playlists.map((p) => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
 
@@ -145,6 +151,39 @@ async function uploadFiles() {
 async function addWeb() { await api('/media/web', { method:'POST', body:{ name: $('#webName').value, url: $('#webUrl').value } }); load(); }
 async function delMedia(id) { if (confirm('Delete this media? It is removed from all playlists.')) { await api('/media/' + id, { method:'DELETE' }); load(); } }
 
+// ---- Video walls ----
+function renderWalls() {
+  const paired = devices.filter((d) => d.paired);
+  return `<div class="card"><div class="row"><input id="wallName" placeholder="New video wall name" class="grow"><button class="primary" onclick="newWall()">Create</button></div>
+    <small>A video wall joins several screens into one big display. All screens in a wall play the same playlist, each showing its own part of the picture. Turn it off to return the screens to their own playlists.</small></div>` +
+    walls.map((w) => {
+      const cells = [];
+      for (let r = 0; r < w.rows; r++) for (let c = 0; c < w.cols; c++) {
+        const m = w.members.find((x) => x.col === c && x.row === r);
+        cells.push(`<select onchange="setCell('${w.id}',${c},${r},this.value)"><option value="">Empty (${c + 1},${r + 1})</option>${paired.map((d) => `<option value="${d.id}" ${m?.deviceId === d.id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select>`);
+      }
+      return `<div class="card"><div class="row">
+        <b class="grow">${esc(w.name)}</b>
+        <label class="switch"><input type="checkbox" ${w.enabled ? 'checked' : ''} onchange="patchWall('${w.id}',{enabled:this.checked})"> ${w.enabled ? 'On' : 'Off'}</label>
+        <button class="danger" onclick="delWall('${w.id}')">Delete</button></div>
+        <div class="row" style="margin-top:10px">Layout <input type="number" min="1" max="8" value="${w.cols}" onchange="patchWall('${w.id}',{cols:+this.value})"> ×
+          <input type="number" min="1" max="8" value="${w.rows}" onchange="patchWall('${w.id}',{rows:+this.value})"> <small>(columns × rows)</small>
+          <span class="grow"></span>Playlist <select onchange="patchWall('${w.id}',{playlistId:this.value})">${plOptions(w.playlistId)}</select></div>
+        <div class="wall" style="grid-template-columns:repeat(${w.cols},1fr)">${cells.join('')}</div>
+        <small>Set a duration for every item (including videos) — screens stay in sync by following the playlist timing. Enabling needs a playlist.</small>
+      </div>`;
+    }).join('') || '<p class="muted">No video walls yet.</p>';
+}
+async function newWall() { await api('/walls', { method:'POST', body:{ name: $('#wallName').value } }); load(); }
+async function patchWall(id, patch) { await api('/walls/' + id, { method:'PUT', body: patch }); load(); }
+async function delWall(id) { if (confirm('Delete this video wall?')) { await api('/walls/' + id, { method:'DELETE' }); load(); } }
+function setCell(id, col, row, deviceId) {
+  const w = walls.find((x) => x.id === id);
+  const members = w.members.filter((m) => !(m.col === col && m.row === row) && m.deviceId !== deviceId);
+  if (deviceId) members.push({ deviceId, col, row });
+  patchWall(id, { members });
+}
+
 // ---- Playlists ----
 function renderPlaylists() {
   const p = playlists.find((x) => x.id === editing);
@@ -153,7 +192,7 @@ function renderPlaylists() {
   return `<div class="card"><div class="row"><button onclick="editing=null;load()">← Back</button><input id="plTitle" value="${esc(p.name)}" class="grow"><button class="primary" onclick="savePlaylist()">Save</button></div></div>
     <div class="card" id="items">${p.items.map((it, i) => { const m = media.find((x) => x.id === it.mediaId); return `<div class="row" style="margin-bottom:6px">
       <span class="grow">${i + 1}. ${esc(m?.name || '(missing)')} <small>${m?.type || ''}</small></span>
-      ${m?.type === 'video' ? '<small>plays full length</small>' : `<input type="number" min="1" value="${it.duration}" onchange="editing_items()[${i}].duration=+this.value"> s`}
+      <input type="number" min="1" value="${it.duration}" onchange="editing_items()[${i}].duration=+this.value"> s${m?.type === 'video' ? ' <small>(video walls only; otherwise full length)</small>' : ''}
       <button onclick="moveItem(${i},-1)">↑</button><button onclick="moveItem(${i},1)">↓</button><button class="danger" onclick="removeItem(${i})">✕</button></div>`; }).join('') || '<p class="muted">Empty playlist. Add media below.</p>'}</div>
     <div class="card row"><select id="addMedia" class="grow">${media.map((m) => `<option value="${m.id}">${esc(m.name)} (${m.type})</option>`).join('')}</select><button onclick="addItem()">+ Add to playlist</button></div>`;
 }

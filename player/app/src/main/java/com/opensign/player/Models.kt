@@ -5,6 +5,9 @@ import java.util.Calendar
 
 data class Item(val id: String, val name: String, val type: String, val duration: Int, val src: String)
 
+/** This screen's tile (col,row) of a cols x rows video wall. */
+data class Wall(val cols: Int, val rows: Int, val col: Int, val row: Int, val playlistId: String)
+
 data class Slot(val playlistId: String, val days: Set<Int>, val startMin: Int, val endMin: Int)
 
 data class Config(
@@ -12,9 +15,12 @@ data class Config(
     val defaultPlaylistId: String?,
     val slots: List<Slot>,
     val playlists: Map<String, List<Item>>,
+    val wall: Wall? = null,
+    val serverTime: Long = 0,
 ) {
     /** Items to play right now: first matching schedule slot, else the default playlist. */
     fun activePlaylist(now: Calendar = Calendar.getInstance()): Pair<String, List<Item>>? {
+        wall?.let { w -> return playlists[w.playlistId]?.let { w.playlistId to it } }
         val dow = now.get(Calendar.DAY_OF_WEEK) - 1 // 0 = Sunday, matches the server
         val prevDow = (dow + 6) % 7
         val min = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
@@ -46,7 +52,10 @@ data class Config(
                 Slot(j.getString("playlistId"), days, toMin(j.getString("start")), toMin(j.getString("end")))
             }
             val def = if (o.isNull("defaultPlaylistId")) null else o.getString("defaultPlaylistId")
-            return Config(o.getString("version"), def, slots, pls)
+            val wall = o.optJSONObject("wall")?.let {
+                Wall(it.getInt("cols"), it.getInt("rows"), it.getInt("col"), it.getInt("row"), it.getString("playlistId"))
+            }
+            return Config(o.getString("version"), def, slots, pls, wall, o.optLong("serverTime", 0))
         }
 
         private fun toMin(hhmm: String) = hhmm.substring(0, 2).toInt() * 60 + hhmm.substring(3, 5).toInt()

@@ -15,7 +15,7 @@ const DB_FILE = path.join(DATA_DIR, 'db.json');
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 // ---- tiny JSON store -------------------------------------------------------
-let db = { devices: [], media: [], playlists: [] };
+let db = { devices: [], media: [], playlists: [], walls: [] };
 if (fs.existsSync(DB_FILE)) db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) };
 function save() {
   const tmp = DB_FILE + '.tmp';
@@ -63,8 +63,20 @@ app.post('/api/player/register', (req, res) => {
   res.json({ paired: d.paired, pairingCode: d.paired ? null : d.pairingCode });
 });
 
+// An enabled video wall takes over every member screen: they all play the wall's playlist,
+// each showing its own tile (col,row) of a cols x rows canvas.
+function wallFor(d) {
+  for (const w of db.walls) {
+    if (!w.enabled || !w.playlistId) continue;
+    const m = w.members.find((x) => x.deviceId === d.id);
+    if (m) return { id: w.id, cols: w.cols, rows: w.rows, col: m.col, row: m.row, playlistId: w.playlistId };
+  }
+  return null;
+}
+
 function buildConfig(req, d) {
-  const playlistIds = new Set([d.defaultPlaylistId, ...d.schedule.map((s) => s.playlistId)].filter(Boolean));
+  const wall = wallFor(d);
+  const playlistIds = new Set(wall ? [wall.playlistId] : [d.defaultPlaylistId, ...d.schedule.map((s) => s.playlistId)].filter(Boolean));
   const playlists = {};
   for (const pid of playlistIds) {
     const p = db.playlists.find((x) => x.id === pid);
@@ -82,11 +94,12 @@ function buildConfig(req, d) {
     };
   }
   const body = {
-    rev: d.rev, name: d.name, defaultPlaylistId: d.defaultPlaylistId,
-    schedule: d.schedule.filter((s) => playlists[s.playlistId]), playlists,
+    rev: d.rev, name: d.name, defaultPlaylistId: d.defaultPlaylistId, wall,
+    schedule: wall ? [] : d.schedule.filter((s) => playlists[s.playlistId]), playlists,
   };
   const version = crypto.createHash('sha1').update(JSON.stringify(body)).digest('hex').slice(0, 12);
-  return { version, ...body };
+  // serverTime is outside the version hash; players use it to sync wall playback across screens.
+  return { version, serverTime: Date.now(), ...body };
 }
 
 app.get('/api/player/:deviceId/config', (req, res) => {
@@ -169,10 +182,44 @@ api.put('/playlists/:id', (req, res) => {
 });
 api.delete('/playlists/:id', (req, res) => {
   db.playlists = db.playlists.filter((x) => x.id !== req.params.id);
+  for (const w of db.walls) if (w.playlistId === req.params.id) { w.playlistId = null; w.enabled = false; }
   for (const d of db.devices) {
     if (d.defaultPlaylistId === req.params.id) d.defaultPlaylistId = null;
     d.schedule = d.schedule.filter((s) => s.playlistId !== req.params.id);
   }
+  bumpAll();
+  res.json({ ok: true });
+});
+
+api.get('/walls', (_req, res) => res.json(db.walls));
+api.post('/walls', (req, res) => {
+  const w = { id: uid(), name: req.body?.name || 'Video wall', enabled: false, cols: 2, rows: 1, playlistId: null, members: [] };
+  db.walls.push(w);
+  save();
+  res.json(w);
+});
+api.put('/walls/:id', (req, res) => {
+  const w = db.walls.find((x) => x.id === req.params.id);
+  if (!w) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  if (typeof b.name === 'string') w.name = b.name;
+  if (typeof b.enabled === 'boolean') w.enabled = b.enabled;
+  if (b.cols !== undefined) w.cols = Math.min(8, Math.max(1, Number(b.cols) || 1));
+  if (b.rows !== undefined) w.rows = Math.min(8, Math.max(1, Number(b.rows) || 1));
+  if (b.playlistId !== undefined) w.playlistId = b.playlistId || null;
+  if (Array.isArray(b.members)) {
+    const seen = new Set();
+    w.members = b.members.filter((m) => db.devices.some((d) => d.id === m.deviceId) && !seen.has(m.deviceId) && seen.add(m.deviceId));
+    w.members = w.members.map((m) => ({ deviceId: m.deviceId, col: Number(m.col) || 0, row: Number(m.row) || 0 }));
+    // a screen can belong to only one wall
+    for (const o of db.walls) if (o !== w) o.members = o.members.filter((m) => !seen.has(m.deviceId));
+  }
+  w.members = w.members.filter((m) => m.col < w.cols && m.row < w.rows);
+  bumpAll();
+  res.json(w);
+});
+api.delete('/walls/:id', (req, res) => {
+  db.walls = db.walls.filter((x) => x.id !== req.params.id);
   bumpAll();
   res.json({ ok: true });
 });
@@ -215,6 +262,7 @@ api.post('/devices/:id/refresh', (req, res) => {
 });
 api.delete('/devices/:id', (req, res) => {
   db.devices = db.devices.filter((x) => x.id !== req.params.id);
+  for (const w of db.walls) w.members = w.members.filter((m) => m.deviceId !== req.params.id);
   save();
   res.json({ ok: true });
 });
