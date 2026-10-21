@@ -3,11 +3,13 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import dgram from 'node:dgram';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; // optional; otherwise the first visitor sets a password
 const PUBLIC_URL = process.env.PUBLIC_URL; // optional, e.g. http://192.168.1.10:3000
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const MEDIA_DIR = path.join(DATA_DIR, 'media');
@@ -15,7 +17,7 @@ const DB_FILE = path.join(DATA_DIR, 'db.json');
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 // ---- tiny JSON store -------------------------------------------------------
-let db = { devices: [], media: [], playlists: [], walls: [] };
+let db = { devices: [], media: [], playlists: [], walls: [], admin: null };
 if (fs.existsSync(DB_FILE)) db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) };
 function save() {
   const tmp = DB_FILE + '.tmp';
@@ -32,17 +34,82 @@ app.use('/media', express.static(MEDIA_DIR, { maxAge: '30d', immutable: true }))
 app.use(express.static(path.join(__dirname, 'public')));
 
 const tokens = new Set();
+const hashPw = (pw, salt) => crypto.scryptSync(pw, salt, 32).toString('hex');
+const setupRequired = () => !ADMIN_PASSWORD && !db.admin;
+const newToken = () => { const t = crypto.randomBytes(24).toString('hex'); tokens.add(t); return t; };
+
+app.get('/api/auth/status', (_req, res) => res.json({ setupRequired: setupRequired() }));
+// First run: whoever opens the admin first chooses the password (no default password to forget to change).
+app.post('/api/auth/setup', (req, res) => {
+  const pw = String(req.body?.password || '');
+  if (!setupRequired()) return res.status(403).json({ error: 'Already set up' });
+  if (pw.length < 6) return res.status(400).json({ error: 'Use at least 6 characters' });
+  const salt = crypto.randomBytes(16).toString('hex');
+  db.admin = { salt, hash: hashPw(pw, salt) };
+  save();
+  res.json({ token: newToken() });
+});
 app.post('/api/auth/login', (req, res) => {
-  if (req.body?.password !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Wrong password' });
-  const token = crypto.randomBytes(24).toString('hex');
-  tokens.add(token);
-  res.json({ token });
+  const pw = String(req.body?.password || '');
+  const ok = ADMIN_PASSWORD
+    ? pw === ADMIN_PASSWORD
+    : db.admin && crypto.timingSafeEqual(Buffer.from(hashPw(pw, db.admin.salt), 'hex'), Buffer.from(db.admin.hash, 'hex'));
+  if (!ok) return res.status(401).json({ error: 'Wrong password' });
+  res.json({ token: newToken() });
 });
 const requireAdmin = (req, res, next) => {
   const token = (req.headers.authorization || '').replace(/^Bearer /, '');
   if (!tokens.has(token)) return res.status(401).json({ error: 'Unauthorized' });
   next();
 };
+
+// ---- links: YouTube / Instagram / Facebook / direct images & videos / any web page ----
+function classifyLink(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  const host = u.hostname.replace(/^(www|m|web)\./, '');
+  const idOk = (x) => x && /^[\w-]{6,64}$/.test(x);
+  if (host === 'youtu.be' || host.endsWith('youtube.com')) {
+    const id = host === 'youtu.be' ? u.pathname.slice(1) : u.searchParams.get('v') || (u.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]+)/) || [])[1];
+    const list = u.searchParams.get('list');
+    if (idOk(id)) return { type: 'web', provider: 'youtube', embed: { id, list: idOk(list) ? list : null } };
+    if (idOk(list)) return { type: 'web', provider: 'youtube', embed: { id: null, list } };
+  }
+  if (host === 'instagram.com') {
+    const m = u.pathname.match(/\/(p|reel|reels|tv)\/([\w-]+)/);
+    if (m) return { type: 'web', provider: 'instagram', embed: { kind: m[1] === 'reels' ? 'reel' : m[1], code: m[2] } };
+  }
+  if (host === 'facebook.com' || host === 'fb.watch' || host === 'fb.com') {
+    return { type: 'web', provider: 'facebook', embed: { href: u.href, video: /\/(videos|watch|reel)|fb\.watch/.test(u.href) } };
+  }
+  if (/\.(jpe?g|png|gif|webp|bmp)$/i.test(u.pathname)) return { type: 'image' };
+  if (/\.(mp4|webm|mkv|mov)$/i.test(u.pathname)) return { type: 'video' };
+  return { type: 'web' };
+}
+
+// A full-screen page that hosts the provider's embed; the player just loads this like any web page.
+app.get('/embed/:id', (req, res) => {
+  const m = db.media.find((x) => x.id === req.params.id);
+  if (!m?.embed) return res.status(404).end();
+  const e = m.embed, enc = encodeURIComponent;
+  let frame;
+  if (m.provider === 'youtube') {
+    const q = 'autoplay=1&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1';
+    const src = e.id
+      ? `https://www.youtube-nocookie.com/embed/${enc(e.id)}?${q}&loop=1&playlist=${enc(e.id)}${e.list ? '&list=' + enc(e.list) : ''}`
+      : `https://www.youtube-nocookie.com/embed/videoseries?list=${enc(e.list)}&${q}&loop=1`;
+    frame = `<iframe src="${src}" allow="autoplay; encrypted-media; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+  } else if (m.provider === 'instagram') {
+    frame = `<iframe class="tall" src="https://www.instagram.com/${e.kind}/${enc(e.code)}/embed/" scrolling="no" allow="autoplay; encrypted-media"></iframe>`;
+  } else {
+    const kind = e.video ? 'video' : 'post';
+    frame = `<iframe src="https://www.facebook.com/plugins/${kind}.php?href=${enc(e.href)}&show_text=false&autoplay=true&mute=1&width=1280" scrolling="no" allow="autoplay; encrypted-media; fullscreen"></iframe>`;
+  }
+  res.type('html').send(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{border:0;width:100%;height:100%}
+iframe.tall{display:block;margin:0 auto;height:100%;width:min(100vw,calc(100vh*.62))}</style>${frame}`);
+});
 
 const baseUrl = (req) => PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
 
@@ -88,7 +155,7 @@ function buildConfig(req, d) {
         if (!m) return [];
         return [{
           id: m.id, name: m.name, type: m.type, duration: it.duration || 10, size: m.size || 0,
-          src: m.type === 'web' ? m.url : `${baseUrl(req)}/media/${m.file}`,
+          src: m.file ? `${baseUrl(req)}/media/${m.file}` : m.embed ? `${baseUrl(req)}/embed/${m.id}` : m.url,
         }];
       }),
     };
@@ -145,14 +212,17 @@ api.post('/media', upload.array('files'), (req, res) => {
   save();
   res.json(added);
 });
-api.post('/media/web', (req, res) => {
+const addLink = (req, res) => {
   const { name, url } = req.body || {};
-  if (!/^https?:\/\//.test(url || '')) return res.status(400).json({ error: 'valid http(s) url required' });
-  const m = { id: uid(), name: name || url, type: 'web', url, size: 0, createdAt: Date.now() };
+  const c = classifyLink((url || '').trim());
+  if (!c) return res.status(400).json({ error: 'Paste a full link starting with http:// or https://' });
+  const m = { id: uid(), name: name || url, url: url.trim(), size: 0, createdAt: Date.now(), ...c };
   db.media.push(m);
   save();
   res.json(m);
-});
+};
+api.post('/media/link', addLink);
+api.post('/media/web', addLink);
 api.delete('/media/:id', (req, res) => {
   const m = db.media.find((x) => x.id === req.params.id);
   if (!m) return res.status(404).json({ error: 'not found' });
@@ -275,6 +345,19 @@ function bumpAll() {
 app.use('/api', api);
 
 app.listen(PORT, () => {
-  console.log(`OpenSign server listening on :${PORT}`);
-  if (ADMIN_PASSWORD === 'admin') console.warn('WARNING: using default admin password. Set ADMIN_PASSWORD.');
+  const ips = Object.values(os.networkInterfaces()).flat().filter((i) => i.family === 'IPv4' && !i.internal).map((i) => i.address);
+  console.log('\nOpenSign is running. Open this address in your browser:');
+  for (const ip of ips) console.log(`   http://${ip}:${PORT}`);
+  console.log('TV players on the same network will find this server automatically.\n');
 });
+
+// Lets TV players find the server with no typing: they broadcast "OPENSIGN?" and we answer with our port.
+const DISCOVERY_PORT = 41234;
+const udp = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+udp.on('message', (msg, rinfo) => {
+  if (msg.toString().trim() !== 'OPENSIGN?') return;
+  const reply = Buffer.from('OPENSIGN ' + JSON.stringify({ port: Number(PORT), name: os.hostname() }));
+  udp.send(reply, rinfo.port, rinfo.address);
+});
+udp.on('error', (e) => console.warn('Auto-discovery disabled:', e.message));
+udp.bind(DISCOVERY_PORT);

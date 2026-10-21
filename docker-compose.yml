@@ -1,0 +1,10 @@
+# docker compose up -d   (host networking lets TVs auto-discover the server; Linux only)
+services:
+  opensign:
+    build: .
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - opensign-data:/data
+volumes:
+  opensign-data:
