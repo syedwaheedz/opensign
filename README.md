@@ -30,6 +30,10 @@ Or copy the APK to a USB stick and open it with a file manager on the TV.
 
 Hold **OK** or press **Menu** on the remote to change the server address.
 
+## Video walls
+Admin > **Video walls** joins several screens into one big display. Create a wall, choose a grid (e.g. 2 x 2), a playlist, and assign a screen to each tile. The **On/Off toggle** enables it; switching it off returns every screen to its own playlist and schedule.
+Screens stay in step by deriving the current item from the server clock, so give every item (videos too) a duration. Mount the TVs in the same order as the grid.
+
 ## Notes
 - Schedules are evaluated on the TV, so they keep working offline. The player re-syncs every 60 s.
 - Auto-start on boot: Android 10+ restricts background activity launches, so some devices need "Display over other apps" granted, or the app set as the home/launcher app.

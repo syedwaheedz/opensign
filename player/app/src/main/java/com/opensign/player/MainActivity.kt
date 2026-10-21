@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
 import android.webkit.WebView
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -34,6 +35,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var api: Api
     private lateinit var cache: MediaCache
     private lateinit var player: ExoPlayer
+    private lateinit var root: FrameLayout
     private lateinit var playerView: PlayerView
     private lateinit var imageView: ImageView
     private lateinit var webView: WebView
@@ -42,6 +44,9 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var config: Config? = null
     @Volatile private var pairingCode: String? = null
     @Volatile private var nowPlaying: String? = null
+    @Volatile private var clockOffset = 0L // server time minus local time, keeps wall screens in step
+    private var appliedWall: Wall? = null
+    private var appliedSize = 0 to 0
     private val jobs = mutableListOf<Job>()
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -56,6 +61,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         api = Api(prefs)
         cache = MediaCache(this, api)
+        root = findViewById(R.id.root)
         playerView = findViewById(R.id.playerView)
         imageView = findViewById(R.id.imageView)
         webView = findViewById(R.id.webView)
@@ -132,6 +138,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     is ConfigResult.Ready -> {
                         pairingCode = null
+                        if (r.config.serverTime > 0) clockOffset = r.config.serverTime - System.currentTimeMillis()
                         if (r.config.version != config?.version) {
                             prefs.cachedConfig = r.json
                             config = r.config
@@ -158,6 +165,7 @@ class MainActivity : AppCompatActivity() {
     private suspend fun playbackLoop() {
         var playlistId: String? = null
         var index = 0
+        while (root.width == 0) delay(50) // wait for first layout so wall tiles are sized correctly
         while (true) {
             val active = config?.activePlaylist()
             if (active == null || active.second.isEmpty()) {
@@ -170,15 +178,33 @@ class MainActivity : AppCompatActivity() {
                 continue
             }
             val (id, items) = active
+            val wall = config?.wall
+            applyWall(wall)
             if (id != playlistId) { playlistId = id; index = 0 }
-            val item = items[index % items.size]
-            index = (index + 1) % items.size
+
+            // Normal mode walks the playlist in order; wall mode derives the item from the
+            // shared server clock so every screen in the wall shows the same frame.
+            val item: Item
+            var startMs = 0L
+            var forMs: Long? = null
+            if (wall != null) {
+                val cycle = items.sumOf { it.duration * 1000L }
+                var pos = (System.currentTimeMillis() + clockOffset) % cycle
+                var i = 0
+                while (pos >= items[i].duration * 1000L) { pos -= items[i].duration * 1000L; i++ }
+                item = items[i]
+                startMs = pos
+                forMs = item.duration * 1000L - pos
+            } else {
+                item = items[index % items.size]
+                index = (index + 1) % items.size
+            }
             nowPlaying = item.name
             try {
                 when (item.type) {
-                    "image" -> showImage(item)
-                    "video" -> showVideo(item)
-                    "web" -> showWeb(item)
+                    "image" -> showImage(item, forMs ?: (item.duration * 1000L))
+                    "video" -> showVideo(item, startMs, forMs)
+                    "web" -> showWeb(item, forMs ?: (item.duration * 1000L))
                     else -> delay(1_000)
                 }
             } catch (e: CancellationException) {
@@ -186,6 +212,22 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 delay(2_000) // bad item: skip rather than getting stuck
             }
+        }
+    }
+
+    /** Scales the content views to the whole wall and offsets them so this screen shows only its tile. */
+    private fun applyWall(wall: Wall?) {
+        val size = root.width to root.height
+        if (size.first == 0 || (wall == appliedWall && size == appliedSize)) return
+        appliedWall = wall
+        appliedSize = size
+        for (v in listOf<View>(playerView, imageView, webView)) {
+            v.layoutParams = FrameLayout.LayoutParams(
+                if (wall == null) FrameLayout.LayoutParams.MATCH_PARENT else size.first * wall.cols,
+                if (wall == null) FrameLayout.LayoutParams.MATCH_PARENT else size.second * wall.rows,
+            )
+            v.translationX = if (wall == null) 0f else -wall.col * size.first.toFloat()
+            v.translationY = if (wall == null) 0f else -wall.row * size.second.toFloat()
         }
     }
 
@@ -200,21 +242,22 @@ class MainActivity : AppCompatActivity() {
         show(statusView)
     }
 
-    private suspend fun showImage(item: Item) {
+    private suspend fun showImage(item: Item, forMs: Long) {
         val local = cache.localOrNull(item)
         imageView.load(local ?: item.src) { crossfade(true) }
         show(imageView)
-        delay(item.duration * 1000L)
+        delay(forMs)
     }
 
-    private suspend fun showWeb(item: Item) {
+    private suspend fun showWeb(item: Item, forMs: Long) {
         webView.loadUrl(item.src)
         show(webView)
-        delay(item.duration * 1000L)
+        delay(forMs)
         webView.loadUrl("about:blank")
     }
 
-    private suspend fun showVideo(item: Item) {
+    /** forMs == null: play once to the end. Otherwise (video wall) start at startMs, loop, and stop after forMs. */
+    private suspend fun showVideo(item: Item, startMs: Long, forMs: Long?) {
         val uri = cache.localOrNull(item)?.let { Uri.fromFile(it) } ?: Uri.parse(item.src)
         val done = CompletableDeferred<Unit>()
         val listener = object : Player.Listener {
@@ -223,11 +266,12 @@ class MainActivity : AppCompatActivity() {
         }
         player.addListener(listener)
         try {
-            player.setMediaItem(MediaItem.fromUri(uri))
+            player.repeatMode = if (forMs != null) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+            player.setMediaItem(MediaItem.fromUri(uri), startMs)
             player.prepare()
             player.play()
             show(playerView)
-            withTimeoutOrNull(30 * 60_000L) { done.await() }
+            withTimeoutOrNull(forMs ?: (30 * 60_000L)) { done.await() }
         } finally {
             player.removeListener(listener)
             player.stop()
