@@ -32,6 +32,7 @@ Or copy the APK to a USB stick and open it with a file manager on the TV.
 3. Upload media or paste YouTube / Instagram / Facebook / image / video / web links, build a playlist, assign it as the screen's default and/or schedule slots by day and time.
 
 Hold **OK** or press **Menu** on the remote to change the server address.
+On-screen buttons (Next, Refresh, Server settings) appear when you move the mouse, touch the screen or press any remote key, and hide again after 4 seconds.
 
 ## Video walls
 Admin > **Video walls** joins several screens into one big display. Create a wall, choose a grid (e.g. 2 x 2), a playlist, and assign a screen to each tile. The **On/Off toggle** enables it; switching it off returns every screen to its own playlist and schedule.

@@ -48,6 +48,41 @@
         android:text="Enter server address"
         android:visibility="gone" />
 
+    <LinearLayout
+        android:id="@+id/controlsBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="24dp"
+        android:background="#99000000"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/nextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:focusable="true"
+            android:text="Next" />
+
+        <Button
+            android:id="@+id/refreshButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:focusable="true"
+            android:text="Refresh" />
+
+        <Button
+            android:id="@+id/settingsButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:focusable="true"
+            android:text="Server settings" />
+    </LinearLayout>
+
     <TextView
         android:id="@+id/alertView"
         android:layout_width="match_parent"

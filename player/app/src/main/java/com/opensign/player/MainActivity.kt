@@ -5,6 +5,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.MotionEvent
+import android.widget.LinearLayout
+import android.widget.Toast
 import android.view.View
 import android.webkit.WebView
 import android.widget.Button
@@ -30,6 +33,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -48,6 +52,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var alertView: TextView
     private val pendingPlays = ConcurrentLinkedQueue<JSONObject>() // proof-of-play, sent with the next heartbeat
     private lateinit var setupButton: Button
+    private lateinit var controlsBar: LinearLayout
+    private var hideControlsJob: Job? = null
+    private var syncJob: Job? = null
+    private var itemJob: Job? = null // the item currently on screen, cancelled by "Next"
 
     @Volatile private var config: Config? = null
     @Volatile private var pairingCode: String? = null
@@ -73,6 +81,10 @@ class MainActivity : AppCompatActivity() {
         alertView = findViewById(R.id.alertView)
         setupButton = findViewById(R.id.setupButton)
         setupButton.setOnClickListener { openSetup() } // works with a mouse, touch or the remote's OK
+        controlsBar = findViewById(R.id.controlsBar)
+        findViewById<Button>(R.id.nextButton).setOnClickListener { skipItem() }
+        findViewById<Button>(R.id.refreshButton).setOnClickListener { refreshNow() }
+        findViewById<Button>(R.id.settingsButton).setOnClickListener { openSetup() }
         root.setOnLongClickListener { openSetup(); true }
 
         player = ExoPlayer.Builder(this).build().also { playerView.player = it }
@@ -87,10 +99,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        jobs += lifecycleScope.launch { syncLoop() }
+        syncJob = lifecycleScope.launch { syncLoop() }.also { jobs += it }
         jobs += lifecycleScope.launch { heartbeatLoop() }
         jobs += lifecycleScope.launch { alertLoop() }
         jobs += lifecycleScope.launch { playbackLoop() }
+        showControls() // visible briefly at start so people can find them
     }
 
     override fun onStop() {
@@ -119,10 +132,56 @@ class MainActivity : AppCompatActivity() {
     }
 
     // MENU, or holding OK on the remote, opens server settings.
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
-        KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> { openSetup(); true }
-        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { event.startTracking(); true }
-        else -> super.onKeyDown(keyCode, event)
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        showControls() // any remote key brings the buttons back
+        return when (keyCode) {
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> { openSetup(); true }
+            // On a focused button, OK must press it; elsewhere a long press opens settings.
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER ->
+                if (currentFocus is Button) super.onKeyDown(keyCode, event) else { event.startTracking(); true }
+            else -> super.onKeyDown(keyCode, event)
+        }
+    }
+
+    // Touch or mouse movement anywhere on screen brings the on-screen buttons back.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        showControls()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_HOVER_MOVE) showControls()
+        return super.dispatchGenericMotionEvent(ev)
+    }
+
+    /** Shows the buttons and hides them again after a few idle seconds. */
+    private fun showControls() {
+        if (!::controlsBar.isInitialized) return
+        hideControlsJob?.cancel()
+        controlsBar.animate().cancel() // a half-finished fade-out must not hide the buttons again
+        if (controlsBar.visibility != View.VISIBLE) {
+            controlsBar.alpha = 0f
+            controlsBar.visibility = View.VISIBLE
+        }
+        controlsBar.animate().alpha(1f).setDuration(150).start()
+        hideControlsJob = lifecycleScope.launch {
+            delay(4_000)
+            controlsBar.animate().alpha(0f).setDuration(300).withEndAction { controlsBar.visibility = View.GONE }.start()
+        }
+    }
+
+    private fun skipItem() {
+        if (config?.wall != null) {
+            Toast.makeText(this, "Not available in a video wall (screens play in sync)", Toast.LENGTH_SHORT).show()
+            return
+        }
+        itemJob?.cancel()
+    }
+
+    private fun refreshNow() {
+        syncJob?.cancel()
+        syncJob = lifecycleScope.launch { syncLoop() }.also { jobs += it }
+        Toast.makeText(this, "Refreshing…", Toast.LENGTH_SHORT).show()
     }
 
     override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean =
@@ -237,18 +296,25 @@ class MainActivity : AppCompatActivity() {
             }
             nowPlaying = item.name
             val startedAt = System.currentTimeMillis()
-            try {
-                when (item.type) {
-                    "image" -> showImage(item, forMs ?: (item.duration * 1000L))
-                    "video" -> showVideo(item, startMs, forMs)
-                    "web" -> showWeb(item, forMs ?: (item.duration * 1000L))
-                    else -> delay(1_000)
+            coroutineScope {
+                val job = launch {
+                    try {
+                        when (item.type) {
+                            "image" -> showImage(item, forMs ?: (item.duration * 1000L))
+                            "video" -> showVideo(item, startMs, forMs)
+                            "web" -> showWeb(item, forMs ?: (item.duration * 1000L))
+                            else -> delay(1_000)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        delay(2_000) // bad item: skip rather than getting stuck
+                    }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                delay(2_000) // bad item: skip rather than getting stuck
+                itemJob = job
+                job.join() // "Next" cancels only this child, so the loop moves on to the following item
             }
+            itemJob = null
             val shownMs = System.currentTimeMillis() - startedAt
             if (shownMs >= 1_000 && pendingPlays.size < 2_000) {
                 pendingPlays.add(
