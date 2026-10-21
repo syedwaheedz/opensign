@@ -38,6 +38,16 @@
         android:textColor="@android:color/white"
         android:textSize="32sp" />
 
+    <Button
+        android:id="@+id/setupButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="48dp"
+        android:focusable="true"
+        android:text="Enter server address"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/alertView"
         android:layout_width="match_parent"

@@ -1,6 +1,5 @@
 package com.opensign.player
 
-import android.os.Build
 import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -57,12 +56,8 @@ object Discovery {
         return list
     }
 
-    private fun isEmulator() = Build.FINGERPRINT.startsWith("generic") ||
-        Build.FINGERPRINT.contains("emulator") || Build.MODEL.contains("Emulator") ||
-        Build.MODEL.contains("Android SDK")
-
-    /** In the Android emulator the computer running the server is always 10.0.2.2. */
-    private fun emulatorHost(): String? = if (isEmulator()) probe("10.0.2.2", 1000) else null
+    /** Android emulators and BlueStacks reach the computer running the server at 10.0.2.2. Harmless to try elsewhere. */
+    private fun emulatorHost(): String? = probe("10.0.2.2", 600)
 
     /** Asks host:3000 whether it is an OpenSign server. */
     private fun probe(host: String, timeoutMs: Int): String? {

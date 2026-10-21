@@ -33,5 +33,5 @@ The TV updates within a minute. It keeps playing if the Wi-Fi drops, and starts 
   1. Check the OpenSign window is still open on the computer.
   2. The TV and computer must be on the **same Wi-Fi/network** (not a guest network, and "client isolation" must be off on the router).
   3. When Windows or macOS asks whether to let **Node.js** accept incoming connections, choose **Allow**. If you clicked Deny, allow it in the firewall settings.
-  4. Still stuck? **Hold the OK button** on the TV remote (or press Menu), type the address shown in the OpenSign window (like `http://192.168.1.20:3000`) and choose Connect. In the Android Studio emulator use `http://10.0.2.2:3000`.
+  4. Still stuck? Choose **Enter server address** on the TV screen (click it with the mouse or press OK), type the address shown in the OpenSign window (like `http://192.168.1.20:3000`) and choose Connect. In the Android Studio emulator use `http://10.0.2.2:3000`.
 - **Forgot the password?** Stop OpenSign, set the `ADMIN_PASSWORD` environment variable to a new one (it overrides the stored password) and start it again.
