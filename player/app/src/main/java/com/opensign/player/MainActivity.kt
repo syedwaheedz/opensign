@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
 import android.webkit.WebView
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
@@ -46,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusView: TextView
     private lateinit var alertView: TextView
     private val pendingPlays = ConcurrentLinkedQueue<JSONObject>() // proof-of-play, sent with the next heartbeat
+    private lateinit var setupButton: Button
 
     @Volatile private var config: Config? = null
     @Volatile private var pairingCode: String? = null
@@ -68,6 +70,9 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         statusView = findViewById(R.id.statusView)
         alertView = findViewById(R.id.alertView)
+        setupButton = findViewById(R.id.setupButton)
+        setupButton.setOnClickListener { openSetup() } // works with a mouse, touch or the remote's OK
+        root.setOnLongClickListener { openSetup(); true }
 
         player = ExoPlayer.Builder(this).build().also { playerView.player = it }
         webView.settings.apply {
@@ -203,7 +208,7 @@ class MainActivity : AppCompatActivity() {
                 nowPlaying = null
                 showStatus(
                     pairingCode?.let { "Almost done!\n\nOn your computer open OpenSign, go to Screens and click Add this screen.\nCode: $it\n\n(hold OK to change server)" }
-                        ?: if (prefs.serverUrl == null) "Looking for your OpenSign server...\n\nMake sure it is running and on the same Wi-Fi/network.\nPress Menu to type its address instead."
+                        ?: if (prefs.serverUrl == null) "Looking for your OpenSign server...\n\nMake sure it is running and on the same Wi-Fi/network.\nOr choose \"Enter server address\" below to type it."
                         else "No content scheduled"
                 )
                 delay(2_000)
@@ -291,6 +296,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun show(view: View) {
         for (v in listOf<View>(playerView, imageView, webView, statusView)) v.visibility = if (v === view) View.VISIBLE else View.GONE
+        setupButton.visibility = statusView.visibility
+        if (statusView.visibility == View.VISIBLE && !setupButton.hasFocus()) setupButton.requestFocus()
     }
 
     private fun showStatus(text: String) {
