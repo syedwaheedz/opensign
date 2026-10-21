@@ -1,18 +1,46 @@
-name: Release APK
+name: CI and Release
 
-# Builds every pull request (verification); publishes a release once the PR is merged into main.
+# Open pull requests only run checks. The signed APK is built and published after a PR is merged into main.
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-apk:
-    if: github.event.action != 'closed' || github.event.pull_request.merged == true
+  checks:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check server syntax
+        run: node --check server/index.js
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Compile Android app (no APK is built)
+        working-directory: player
+        run: gradle :app:compileDebugKotlin --no-daemon
+
+  release:
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -46,15 +74,11 @@ jobs:
         run: gradle assembleRelease --no-daemon
 
       - name: Name the APK
-        run: cp player/app/build/outputs/apk/release/app-release.apk opensign-player-0.1.${{ github.run_number }}.apk
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: opensign-player-apk
-          path: opensign-player-*.apk
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: cp player/app/build/outputs/apk/release/app-release.apk "opensign-player-0.1.${RUN_NUMBER}.apk"
 
       - name: Publish GitHub Release
-        if: github.event.pull_request.merged == true
         env:
           GH_TOKEN: ${{ github.token }}
           # Passed as env vars, never pasted into the script: PR titles are untrusted text.
