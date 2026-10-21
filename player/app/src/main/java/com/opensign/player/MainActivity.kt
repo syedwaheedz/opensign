@@ -52,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var config: Config? = null
     @Volatile private var pairingCode: String? = null
     @Volatile private var nowPlaying: String? = null
+    @Volatile private var connectError: String? = null // why the last sync failed, shown on the status screen
     @Volatile private var clockOffset = 0L // server time minus local time, keeps wall screens in step
     private var appliedWall: Wall? = null
     private var appliedSize = 0 to 0
@@ -161,9 +162,11 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 failures = 0
+                connectError = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                connectError = e.message ?: e.javaClass.simpleName
                 // Offline or server down: keep playing the cached config. If the server's address
                 // changed (router gave it a new IP), look for it again.
                 if (++failures >= 3) {
@@ -206,11 +209,7 @@ class MainActivity : AppCompatActivity() {
             val active = config?.activePlaylist()
             if (active == null || active.second.isEmpty()) {
                 nowPlaying = null
-                showStatus(
-                    pairingCode?.let { "Almost done!\n\nOn your computer open OpenSign, go to Screens and click Add this screen.\nCode: $it\n\n(hold OK to change server)" }
-                        ?: if (prefs.serverUrl == null) "Looking for your OpenSign server...\n\nMake sure it is running and on the same Wi-Fi/network.\nOr choose \"Enter server address\" below to type it."
-                        else "No content scheduled"
-                )
+                showStatus(statusText())
                 delay(2_000)
                 continue
             }
@@ -257,6 +256,22 @@ class MainActivity : AppCompatActivity() {
                         .put("start", startedAt + clockOffset).put("ms", shownMs)
                 )
             }
+        }
+    }
+
+    /** Says what is actually wrong, so a stuck screen can be fixed without guessing. */
+    private fun statusText(): String {
+        val server = prefs.serverUrl
+        val err = connectError
+        return when {
+            pairingCode != null ->
+                "Almost done!\n\nOn your computer open OpenSign, go to Screens and click Add this screen.\nCode: $pairingCode\n\nServer: $server"
+            server == null ->
+                "Looking for your OpenSign server...\n\nMake sure it is running and on the same Wi-Fi/network.\nOr choose \"Enter server address\" below to type it."
+            err != null && config == null ->
+                "Can't reach the OpenSign server\n\n$server\n\n($err)\n\nCheck it is running and on the same network, or choose \"Enter server address\" to correct it."
+            config == null -> "Connecting to $server ..."
+            else -> "Connected as \"${config?.name ?: "this screen"}\"\n\nNo content is assigned yet.\nIn the admin open Screens and choose a playlist for this screen.\n\nServer: $server"
         }
     }
 
