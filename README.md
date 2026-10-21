@@ -1,5 +1,7 @@
 # OpenSign
 
+> New here? Read **[GETTING-STARTED.md](GETTING-STARTED.md)** for the no-tech walkthrough.
+
 Open-source digital signage in the spirit of Samsung MagicINFO.
 
 - `server/` – Node.js CMS + web admin: media library (images, video, web pages), playlists, per-screen weekly schedules, device pairing, online status.
@@ -10,7 +12,8 @@ Open-source digital signage in the spirit of Samsung MagicINFO.
 cd server && npm install
 ADMIN_PASSWORD=choose-one npm start      # http://<server-ip>:3000
 ```
-Env: `PORT`, `ADMIN_PASSWORD` (default `admin`), `DATA_DIR`, `PUBLIC_URL` (set if behind a proxy).
+Double-click `start.bat` / `start.command`, or use `docker compose up -d`. The first visitor to the admin chooses the password. Optional env: `PORT`, `ADMIN_PASSWORD` (overrides the stored password), `DATA_DIR`, `PUBLIC_URL` (set if behind a proxy).
+TV players discover the server automatically via UDP broadcast on port 41234 (same network required).
 
 ## 2. Build and install the TV app
 Open `player/` in Android Studio (JDK 17), let it sync, then **Build > Build APK(s)**
@@ -24,9 +27,9 @@ adb install -r app-debug.apk
 Or copy the APK to a USB stick and open it with a file manager on the TV.
 
 ## 3. Pair a screen
-1. Launch **OpenSign Player**, enter the server address (e.g. `http://192.168.1.10:3000`).
-2. The TV shows a 6-digit code. In the admin, **Screens > Add**, enter the code and a name.
-3. Upload media, build a playlist, assign it as the screen's default and/or schedule slots by day and time.
+1. Launch **OpenSign Player**. It finds the server on its own (or press Menu to type the address).
+2. The TV appears under **Screens** in the admin: click **Add this screen** and name it.
+3. Upload media or paste YouTube / Instagram / Facebook / image / video / web links, build a playlist, assign it as the screen's default and/or schedule slots by day and time.
 
 Hold **OK** or press **Menu** on the remote to change the server address.
 

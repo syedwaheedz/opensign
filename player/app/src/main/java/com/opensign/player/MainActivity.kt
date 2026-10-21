@@ -53,11 +53,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
-        if (prefs.serverUrl == null) {
-            startActivity(Intent(this, SetupActivity::class.java))
-            finish()
-            return
-        }
         setContentView(R.layout.activity_main)
         api = Api(prefs)
         cache = MediaCache(this, api)
@@ -79,7 +74,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (prefs.serverUrl == null) return
         jobs += lifecycleScope.launch { syncLoop() }
         jobs += lifecycleScope.launch { heartbeatLoop() }
         jobs += lifecycleScope.launch { playbackLoop() }
@@ -126,8 +120,15 @@ class MainActivity : AppCompatActivity() {
     // ---- background loops ---------------------------------------------------
 
     private suspend fun syncLoop() {
+        var failures = 0
         while (true) {
             var wait = 60_000L
+            if (prefs.serverUrl == null) {
+                // First run: look for the server on the network instead of asking for an address.
+                val found = withContext(Dispatchers.IO) { Discovery.find() }
+                if (found == null) { delay(2_000); continue }
+                prefs.serverUrl = found
+            }
             try {
                 when (val r = withContext(Dispatchers.IO) { api.fetchConfig() }) {
                     is ConfigResult.Pairing -> {
@@ -146,10 +147,15 @@ class MainActivity : AppCompatActivity() {
                         withContext(Dispatchers.IO) { cache.sync(r.config) }
                     }
                 }
+                failures = 0
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // Offline or server down: keep playing the cached config.
+                // Offline or server down: keep playing the cached config. If the server's address
+                // changed (router gave it a new IP), look for it again.
+                if (++failures >= 3) {
+                    withContext(Dispatchers.IO) { Discovery.find() }?.let { prefs.serverUrl = it; failures = 0 }
+                }
             }
             delay(wait)
         }
@@ -171,8 +177,9 @@ class MainActivity : AppCompatActivity() {
             if (active == null || active.second.isEmpty()) {
                 nowPlaying = null
                 showStatus(
-                    pairingCode?.let { "Pair this screen\n\nOpen the OpenSign admin, go to Screens and enter code\n\n$it\n\n(hold OK to change server)" }
-                        ?: "No content scheduled"
+                    pairingCode?.let { "Almost done!\n\nOn your computer open OpenSign, go to Screens and click Add this screen.\nCode: $it\n\n(hold OK to change server)" }
+                        ?: if (prefs.serverUrl == null) "Looking for your OpenSign server...\n\nMake sure it is running and on the same Wi-Fi/network.\nPress Menu to type its address instead."
+                        else "No content scheduled"
                 )
                 delay(2_000)
                 continue
