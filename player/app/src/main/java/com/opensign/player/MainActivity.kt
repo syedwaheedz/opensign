@@ -203,7 +203,7 @@ class MainActivity : AppCompatActivity() {
                 nowPlaying = null
                 showStatus(
                     pairingCode?.let { "Almost done!\n\nOn your computer open OpenSign, go to Screens and click Add this screen.\nCode: $it\n\n(hold OK to change server)" }
-                        ?: if (prefs.serverUrl == null) "Looking for your OpenSign server...\n\nMake sure it is running and on the same Wi-Fi/network.\nPress Menu to type its address instead."
+                        ?: if (prefs.serverUrl == null) "Looking for your OpenSign server...\n\nMake sure it is running and on the same Wi-Fi/network.\nOr hold the OK button (or press Menu) to type its address."
                         else "No content scheduled"
                 )
                 delay(2_000)

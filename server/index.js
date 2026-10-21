@@ -480,7 +480,8 @@ app.listen(PORT, () => {
   const ips = Object.values(os.networkInterfaces()).flat().filter((i) => i.family === 'IPv4' && !i.internal).map((i) => i.address);
   console.log('\nOpenSign is running. Open this address in your browser:');
   for (const ip of ips) console.log(`   http://${ip}:${PORT}`);
-  console.log('TV players on the same network will find this server automatically.\n');
+  console.log('TV players on the same network will find this server automatically.');
+  console.log(`If a TV cannot find it, hold OK on its remote and type: http://${ips[0] ?? 'this-computer'}:${PORT}\n`);
 });
 
 // Lets TV players find the server with no typing: they broadcast "OPENSIGN?" and we answer with our port.
@@ -488,6 +489,7 @@ const DISCOVERY_PORT = 41234;
 const udp = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 udp.on('message', (msg, rinfo) => {
   if (msg.toString().trim() !== 'OPENSIGN?') return;
+  console.log(`A TV at ${rinfo.address} is looking for this server.`);
   const reply = Buffer.from('OPENSIGN ' + JSON.stringify({ port: Number(PORT), name: os.hostname() }));
   udp.send(reply, rinfo.port, rinfo.address);
 });
