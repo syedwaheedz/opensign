@@ -6,6 +6,7 @@ import path from 'node:path';
 import dgram from 'node:dgram';
 import os from 'node:os';
 import { registerCatalogRoutes } from './catalog-routes.js';
+import { registerPosterRoutes } from './poster-routes.js';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -19,7 +20,7 @@ const PLAYS_FILE = path.join(DATA_DIR, 'plays.ndjson'); // append-only proof-of-
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 // ---- tiny JSON store -------------------------------------------------------
-let db = { devices: [], media: [], playlists: [], walls: [], layouts: [], products: [], admin: null, alert: null };
+let db = { devices: [], media: [], playlists: [], walls: [], layouts: [], products: [], posters: [], admin: null, alert: null };
 if (fs.existsSync(DB_FILE)) db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) };
 function save() {
   const tmp = DB_FILE + '.tmp';
@@ -525,7 +526,10 @@ api.post('/media/widget', (req, res) => {
   res.json(m);
 });
 
-registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload });
+const hooks = {}; // lets the catalog tell the poster module when a product changed
+registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, hooks });
+registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bumpAll, hooks });
+hooks.retireStale(); // also at start-up, in case an offer expired while the server was off
 
 app.use('/api', api);
 

@@ -73,6 +73,9 @@ Staff keep one record per phone: brand, model, variants (RAM / storage / colour)
 Settings (environment variables): `IMPORT_ALLOWED_HOSTS` (default `storetmobiles2-code.github.io`; the import only reads from these hosts), `PRODUCT_STALE_DAYS` (default 30).
 Note: the store site's `robots.txt` disallows crawlers. The importer reads only the allowed owner site, one page at a time with a pause, on demand, and never from the TV player.
 
+## Posters (Posters tab)
+Staff pick a phone, choose a template (premium flagship, camera, gaming, price and offer, new launch, store brand) and a size (1920 × 1080, 1080 × 1350, 1080 × 1080, A4, A3), preview, **approve**, then export PNG / JPEG / PDF or add the poster to the media library and a playlist. Posters are drawn in the admin page (browser canvas); the TV player only shows normal images. A poster that was published but whose product, price or offers later change is removed from playlists automatically. Full staff guide, upgrade steps, test results and limitations: **[docs/MYT-MOBILES.md](docs/MYT-MOBILES.md)**.
+
 ## Tests
 `cd server && npm test` runs the server regression tests. CI runs them on every pull request.
 

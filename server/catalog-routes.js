@@ -4,7 +4,8 @@ import path from 'node:path';
 import * as C from './catalog.js';
 import * as I from './importer.js';
 
-export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload }) {
+export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, hooks = {} }) {
+  const changed = () => hooks.retireStale?.(); // posters built from a product must be re-checked when it changes
   const find = (id) => db.products.find((p) => p.id === id);
   const view = (p) => ({ ...p, warnings: C.warnings(p), fresh: C.isFresh(p) });
   const h = (fn) => async (req, res) => {
@@ -40,6 +41,7 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload })
     const next = C.applyEdit(p, req.body || {}, uid);
     db.products[db.products.indexOf(p)] = next;
     save();
+    changed();
     res.json(view(next));
   }));
 
@@ -49,6 +51,7 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload })
     else { p.status = 'verified'; p.lastVerified = C.today(); p.sourceChangedOn = null; }
     p.updatedAt = Date.now();
     save();
+    changed();
     res.json(view(p));
   }));
 
@@ -128,6 +131,11 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload })
       job.imported++;
     } else if (existing.sourceHash === parsed.sourceHash) {
       existing.sourceCheckedOn = stamp;
+      // Improved spec derivation reaches products whose poster specs staff never edited.
+      if (JSON.stringify(existing.posterSpecs) === JSON.stringify(existing.posterSpecsDerived ?? existing.posterSpecs) && JSON.stringify(C.cleanPosterSpecs(parsed.posterSpecs)) !== JSON.stringify(existing.posterSpecs)) {
+        existing.posterSpecs = C.cleanPosterSpecs(parsed.posterSpecs);
+        existing.posterSpecsDerived = existing.posterSpecs;
+      }
       await addImages(existing, parsed.images); // retry images that failed last time
       job.unchanged++;
     } else {
@@ -158,6 +166,7 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload })
     job.finishedAt = Date.now();
     job.errors = job.errors.slice(0, 50);
     save();
+    changed();
   }
 
   api.post('/catalog/import', h((req, res) => {

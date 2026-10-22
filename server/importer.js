@@ -118,8 +118,10 @@ export function derivePosterSpecs({ highlights = [], specs = [], variants = [] }
   const stor = [...new Set(variants.map((v) => v.storage).filter(Boolean))];
   const memory = rams.length || stor.length ? [rams.join(' / '), stor.join(' / ')].filter(Boolean).join(' + ') : '';
   const extra = hl(/IP\d{2}/i) || hl(/S Pen|water|dust/i);
+  const network = spec(/key facts|network|connectivity/i, /^network/i) || (hl(/\b5G\b/).match(/\b5G\b/) || [''])[0];
+  const colours = [...new Set(variants.map((v) => v.colour).filter(Boolean))].join(', ');
   const cut = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
-  return { display: cut(display, 90), processor: cut(processor, 80), camera: cut(camera, 90), battery: cut(battery, 60), memory: cut(memory, 60), extra: cut(extra, 90) };
+  return { display: cut(display, 90), processor: cut(processor, 80), camera: cut(camera, 90), battery: cut(battery, 60), memory: cut(memory, 60), network: cut(network, 40), colours: cut(colours, 80), extra: cut(extra, 90) };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
