@@ -63,6 +63,16 @@ We are not claiming parity everywhere: the last row is the roadmap. Where OpenSi
 ## Branding
 The admin is branded for myT Mobiles (logo at `server/public/brand/myt-logo.png`, brand pink `#F23088` on black/charcoal). Technical names stay `OpenSign` (package, Android app id, discovery protocol). To use another logo, replace that PNG (a PNG with a black background blends best).
 
+## Smartphone catalog (Products tab)
+Staff keep one record per phone: brand, model, variants (RAM / storage / colour), **official price (MRP)** and **myT Mobiles selling price** kept separate, key specifications, images, offers, stock, source URL and last verified date.
+- **Import from store website** reads the smartphones from the myT Mobiles online store and saves them as **Draft**, with all their images and the source URL. Run it again to refresh: unchanged products are skipped, and products the store changed go back to Draft with a warning.
+- **Verify:** only a verified product (within `PRODUCT_STALE_DAYS`, default 30) shows prices, stock and offers on posters. Editing the brand, model, variants, specs or highlights of a verified product returns it to Draft.
+- **Offers** (discount, bank, exchange, other) are separate from prices and never subtracted from them. An offer shows only when it is **approved** and **not expired**. Bank and exchange offers need written conditions.
+- **Warnings** list missing images, prices, source, specs, outdated verification and expired offers.
+
+Settings (environment variables): `IMPORT_ALLOWED_HOSTS` (default `storetmobiles2-code.github.io`; the import only reads from these hosts), `PRODUCT_STALE_DAYS` (default 30).
+Note: the store site's `robots.txt` disallows crawlers. The importer reads only the allowed owner site, one page at a time with a pause, on demand, and never from the TV player.
+
 ## Tests
 `cd server && npm test` runs the server regression tests. CI runs them on every pull request.
 

@@ -23,7 +23,8 @@ There is no linter or formatter. Android has no tests. Server tests live in `ser
 - YouTube/Instagram/Facebook links and widgets (text/ticker/clock) are server-rendered pages at `/embed/:id`, loaded in the player's WebView.
 - Video wall: an enabled wall overrides member screens' playlist/schedule; screens sync via the server clock (`clockOffset`), not a handshake.
 - Player logic lives in `MainActivity` as coroutine loops (sync, heartbeat, alert, playback). Last config is cached in `Prefs` for offline start.
-- Admin UI is one no-build file (`server/public/index.html`) re-rendering from API data into `innerHTML`.
+- Admin UI is `server/public/index.html` plus tab scripts (`products.js`): no build step, re-rendering API data into `innerHTML`.
+- Catalog rules live in `server/catalog.js` (verification, offers, warnings, `posterData`). Posters must read product data only through `posterData`, never raw products. `server/importer.js` only fetches/parses; `catalog-routes.js` saves.
 
 # Code style
 - Server: 2-space indent, single quotes, semicolons, compact one-line handlers; comments explain why, not what.
