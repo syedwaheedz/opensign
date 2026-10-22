@@ -35,7 +35,10 @@
   .wall { display:grid; gap:6px; margin-top:10px } .wall select { width:100%; min-width:0 }
   .days label { margin-right:6px; user-select:none } input[type=number] { width:70px } input[type=time] { padding:4px 6px }
   #login { max-width:340px; margin:14vh auto; text-align:center } #login .logo { height:84px; margin-bottom:8px } #login .row { text-align:left }
-  footer { text-align:center; color:var(--muted); font-size:11px; padding:24px 0 32px; letter-spacing:.08em }
+  .badge { display:inline-block; font-size:11px; padding:1px 8px; border-radius:20px; border:1px solid var(--line); color:var(--muted) } .badge.ok { color:var(--ok); border-color:var(--ok) } .badge.warn { color:#f5b84c; border-color:#f5b84c }
+  .pgrid { grid-template-columns:repeat(auto-fill,minmax(210px,1fr)) } .pcard { cursor:pointer } .pcard:hover { border-color:var(--accent) } .pcard .pic { height:150px }
+  .warns { margin:10px 0 0; padding-left:18px } textarea { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:6px 10px }
+  main { max-width:1100px } footer { text-align:center; color:var(--muted); font-size:11px; padding:24px 0 32px; letter-spacing:.08em }
 </style>
 </head>
 <body>
@@ -53,6 +56,7 @@
   <header>
     <div class="brand"><img class="logo" src="/brand/myt-logo.png" alt="myT Mobiles"><span class="product">Signage</span></div>
     <nav>
+      <button data-tab="products">Products</button>
       <button data-tab="devices">Screens</button>
       <button data-tab="media">Media</button>
       <button data-tab="playlists">Playlists</button>
@@ -66,11 +70,12 @@
   <main id="view"></main>
   <footer>POWERED BY OPENSIGN</footer>
 </div>
+<script src="/products.js"></script>
 <script>
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-const TABS = ['devices', 'media', 'playlists', 'layouts', 'walls', 'alerts', 'reports'];
+const TABS = ['products', 'devices', 'media', 'playlists', 'layouts', 'walls', 'alerts', 'reports'];
 let token = localStorage.getItem('token'), tab = localStorage.getItem('tab');
-if (!TABS.includes(tab)) tab = 'devices'; // a stale or unknown saved tab must not blank the page
+if (!TABS.includes(tab)) tab = 'products'; // a stale or unknown saved tab must not blank the page
 let devices = [], media = [], playlists = [], walls = [], layouts = [], alertNow = null, report = null, reportDays = 7, editing = null, timer;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
@@ -103,6 +108,7 @@ function logout() { localStorage.removeItem('token'); token = null; clearInterva
 async function load() {
   [devices, media, playlists, walls, alertNow, layouts] = await Promise.all([api('/devices'), api('/media'), api('/playlists'), api('/walls'), api('/alert'), api('/layouts')]);
   if (tab === 'reports') report = await api('/reports/plays?days=' + reportDays);
+  if (tab === 'products') await loadProducts();
   render();
 }
 function start() {
@@ -113,7 +119,7 @@ function start() {
 }
 function render() {
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  $('#view').innerHTML = { devices: renderDevices, media: renderMedia, playlists: renderPlaylists, walls: renderWalls, layouts: renderLayouts, alerts: renderAlerts, reports: renderReports }[tab]();
+  $('#view').innerHTML = { products: renderProducts, devices: renderDevices, media: renderMedia, playlists: renderPlaylists, walls: renderWalls, layouts: renderLayouts, alerts: renderAlerts, reports: renderReports }[tab]();
 }
 const plOptions = (sel) => '<option value="">— none —</option>' + playlists.map((p) => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
 const contentOptions = (sel) => plOptions(sel).replace('</option>', '</option>') + layouts.map((l) => `<option value="${l.id}" ${l.id === sel ? 'selected' : ''}>▦ ${esc(l.name)} (layout)</option>`).join('');

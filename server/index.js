@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import dgram from 'node:dgram';
 import os from 'node:os';
+import { registerCatalogRoutes } from './catalog-routes.js';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -18,7 +19,7 @@ const PLAYS_FILE = path.join(DATA_DIR, 'plays.ndjson'); // append-only proof-of-
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 // ---- tiny JSON store -------------------------------------------------------
-let db = { devices: [], media: [], playlists: [], walls: [], layouts: [], admin: null, alert: null };
+let db = { devices: [], media: [], playlists: [], walls: [], layouts: [], products: [], admin: null, alert: null };
 if (fs.existsSync(DB_FILE)) db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) };
 function save() {
   const tmp = DB_FILE + '.tmp';
@@ -40,7 +41,7 @@ const notifyDevice = (d) => notify([d.deviceId]);
 
 // ---- app -------------------------------------------------------------------
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use('/media', express.static(MEDIA_DIR, { maxAge: '30d', immutable: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -523,6 +524,8 @@ api.post('/media/widget', (req, res) => {
   save();
   res.json(m);
 });
+
+registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload });
 
 app.use('/api', api);
 
