@@ -104,6 +104,7 @@ function renderProductEdit() {
       <select onchange="pd('brand',this.value)">${[...prodMeta.brands, ...(prodMeta.brands.includes(p.brand) ? [] : [p.brand])].map((b) => `<option ${b === p.brand ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>
       <input class="grow" placeholder="Model" value="${esc(p.model)}" oninput="pd('model',this.value)">
       <select onchange="pd('condition',this.value)"><option value="new" ${p.condition === 'new' ? 'selected' : ''}>New</option><option value="demo" ${p.condition === 'demo' ? 'selected' : ''}>Demo unit</option></select></div>
+      <div class="row" style="margin-top:8px"><input class="grow" placeholder="Launch information for the New launch poster, e.g. Launched in India on 5 March 2026 (verify before use)" value="${esc(p.launchInfo || '')}" oninput="pd('launchInfo',this.value)"></div>
       <div class="row" style="margin-top:8px"><input class="grow" placeholder="Source URL (official page or store listing)" value="${esc(p.sourceUrl)}" oninput="pd('sourceUrl',this.value)">
       <small>${p.sourceCheckedOn ? 'Source read on ' + p.sourceCheckedOn : ''}</small></div></div>
 

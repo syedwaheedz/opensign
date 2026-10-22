@@ -24,6 +24,7 @@ There is no linter or formatter. Android has no tests. Server tests live in `ser
 - Video wall: an enabled wall overrides member screens' playlist/schedule; screens sync via the server clock (`clockOffset`), not a handshake.
 - Player logic lives in `MainActivity` as coroutine loops (sync, heartbeat, alert, playback). Last config is cached in `Prefs` for offline start.
 - Admin UI is `server/public/index.html` plus tab scripts (`products.js`): no build step, re-rendering API data into `innerHTML`.
+- Posters are drawn in the admin page (`public/poster-render.js`, canvas); the server only stores designs, enforces approval (`poster-routes.js`) and keeps the rendered image in the normal media library. A published poster whose content hash changed is removed from playlists (`retireStale`).
 - Catalog rules live in `server/catalog.js` (verification, offers, warnings, `posterData`). Posters must read product data only through `posterData`, never raw products. `server/importer.js` only fetches/parses; `catalog-routes.js` saves.
 
 # Code style
@@ -49,11 +50,13 @@ There is no linter or formatter. Android has no tests. Server tests live in `ser
 - IMPORTANT: never read, print, regenerate or change the signing key or secrets (`~/.opensign-signing/`, `KEYSTORE_*`, `KEY_*` repo secrets).
 - Do not paste `${{ github.event.* }}` (PR titles, branch names) into workflow `run:` scripts. Pass them through `env:`.
 - Do not add a default or hard-coded admin password; first-run setup chooses it.
+- Do not show a price, stock or offer on a poster except from `posterData()`. Do not subtract offers from selling prices.
 - Do not rename or change the `setupRequired` field of `/api/auth/status` or the UDP discovery protocol (see Gotchas).
 
 # Gotchas
 - IMPORTANT: no JDK or Android SDK on the dev machine. Kotlin and Gradle changes are compiled only by CI, so write them carefully.
 - TV auto-discovery uses UDP broadcast on port 41234, then probes `10.0.2.2:3000` (emulators/BlueStacks) and sweeps the local /24 for `/api/auth/status` containing `setupRequired`.
+- Admin scripts share one global scope: a duplicate top-level `const`/`let` name across `index.html`, `products.js`, `posters.js`, `poster-render.js` silently breaks a script. Use unique names.
 - No Gradle wrapper jar is committed; CI uses Gradle 8.7 via `gradle/actions/setup-gradle`.
 - `versionCode` comes from `BUILD_NUMBER` (CI run number); local builds get 1. Release tags are `v0.1.<run number>`.
 - `ADMIN_PASSWORD` env overrides the stored password. Admin tokens are in memory, so a server restart signs everyone out.

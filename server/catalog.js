@@ -62,12 +62,12 @@ export function cleanSpecs(list) {
 
 export function cleanPosterSpecs(s) {
   const out = {};
-  for (const k of ['display', 'processor', 'camera', 'battery', 'memory', 'extra']) out[k] = str(s?.[k], 120);
+  for (const k of ['display', 'processor', 'camera', 'battery', 'memory', 'network', 'colours', 'extra']) out[k] = str(s?.[k], 120);
   return out;
 }
 
 /** Fields that describe the product itself. Changing them invalidates a staff verification. */
-const VERIFIED_FIELDS = ['brand', 'model', 'variants', 'specs', 'highlights'];
+const VERIFIED_FIELDS = ['brand', 'model', 'variants', 'specs', 'highlights', 'launchInfo'];
 
 export function applyEdit(existing, input, uid) {
   const p = { ...existing };
@@ -81,6 +81,7 @@ export function applyEdit(existing, input, uid) {
   if (input.specs !== undefined) p.specs = cleanSpecs(input.specs);
   if (input.posterSpecs !== undefined) p.posterSpecs = cleanPosterSpecs(input.posterSpecs);
   if (input.offers !== undefined) p.offers = (Array.isArray(input.offers) ? input.offers : []).slice(0, 12).map((o) => cleanOffer(o, uid));
+  if (input.launchInfo !== undefined) p.launchInfo = str(input.launchInfo, 120);
   if (input.stock !== undefined) p.stock = STOCK.includes(input.stock) ? input.stock : 'unknown';
   if (input.stockNote !== undefined) p.stockNote = str(input.stockNote, 120);
   if (input.sourceUrl !== undefined) p.sourceUrl = str(input.sourceUrl, 500);
@@ -102,7 +103,7 @@ export function applyEdit(existing, input, uid) {
 export function newProduct(input, uid) {
   const base = {
     id: uid(), category: 'smartphone', condition: 'new', brand: '', model: '', colours: [], variants: [], highlights: [], specs: [],
-    posterSpecs: cleanPosterSpecs({}), images: [], offers: [], stock: 'unknown', stockNote: '', sourceUrl: '', sourceName: '',
+    posterSpecs: cleanPosterSpecs({}), launchInfo: '', images: [], offers: [], stock: 'unknown', stockNote: '', sourceUrl: '', sourceName: '',
     sourceCheckedOn: null, sourceHash: null, sourceChangedOn: null, posterSpecsDerived: null, status: 'draft', lastVerified: null, createdAt: Date.now(), updatedAt: Date.now(),
   };
   return applyEdit(base, input, uid);
@@ -121,7 +122,9 @@ export function warnings(p, now = today()) {
   if (p.variants.length && !p.variants.some((v) => v.officialPrice)) add('warn', 'no_official_price', 'No official price (MRP) is set.');
   if (!p.sourceUrl) add('warn', 'no_source', 'No source URL is recorded.');
   if (!p.highlights.length && !p.specs.length) add('warn', 'no_specs', 'No key specifications are listed.');
+  const headline = ['display', 'processor', 'camera', 'battery'].filter((k) => p.posterSpecs[k]).length;
   if (!Object.values(p.posterSpecs).some(Boolean)) add('warn', 'no_poster_specs', 'No poster spec highlights are set.');
+  else if (headline < 2) add('warn', 'thin_specs', 'Only basic specs are listed (no display, processor, camera or battery). Posters will show memory, network and colours. Add the real specs if you want them highlighted.');
   if (p.status !== 'verified') add('info', 'not_verified', 'Not verified. Prices and offers stay hidden on posters.');
   else if (!isFresh(p, now)) add('warn', 'outdated', `Verified more than ${STALE_DAYS} days ago. Verify again before publishing prices.`);
   for (const o of p.offers) {
@@ -146,6 +149,7 @@ export function posterData(p, now = today()) {
     colours: p.colours,
     highlights: p.highlights,
     posterSpecs: p.posterSpecs,
+    launchInfo: p.launchInfo || '',
     images: p.images.map((i) => ({ file: i.file, color: i.color || '', view: i.view || '' })),
     variants: p.variants.map((v) => ({
       ram: v.ram, storage: v.storage, colour: v.colour,

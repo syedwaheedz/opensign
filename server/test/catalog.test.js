@@ -179,3 +179,18 @@ test('import: creates drafts with images, skips unchanged, and flags changed lis
   assert.ok(changed.warnings.some((w) => w.code === 'source_changed'));
   assert.equal(changed.images.length, 1); // the image was not downloaded twice
 });
+
+test('thin store pages: posters use memory, network and colours, and staff are warned', () => {
+  const ps = derivePosterSpecs({
+    highlights: ['5G connectivity', '8 GB RAM · 128 GB/256 GB storage'],
+    specs: [{ group: 'Key facts', items: [{ label: 'Network', value: '5G' }, { label: 'Colours', value: 'Carbon Black, Mirage Blue' }] }],
+    variants: [{ ram: '8 GB', storage: '128 GB', colour: 'Carbon Black' }, { ram: '8 GB', storage: '256 GB', colour: 'Mirage Blue' }],
+  });
+  assert.equal(ps.network, '5G');
+  assert.equal(ps.colours, 'Carbon Black, Mirage Blue');
+  assert.equal(ps.memory, '8 GB + 128 GB / 256 GB');
+  assert.equal(ps.display, ''); // nothing invented
+  assert.equal(ps.camera, '');
+  const p = { images: [{ file: 'a' }], variants: [], sourceUrl: 'x', highlights: ['h'], posterSpecs: ps, status: 'draft', offers: [], stock: 'unknown', condition: 'new' };
+  assert.ok(warnings(p).some((w) => w.code === 'thin_specs'));
+});

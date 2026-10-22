@@ -26,6 +26,9 @@ In the admin, open **Screens**. Your TV is listed: click **Add this screen** and
 
 The TV updates within a minute. It keeps playing if the Wi-Fi drops, and starts again when the TV is switched on.
 
+## Phone posters (myT Mobiles)
+Open **Products**, import the phones and verify them. Then open **Posters**, create posters, approve them, add them to the media library and build a playlist. See `docs/MYT-MOBILES.md`.
+
 ## Good to know
 - **Links need internet on the TV.** Instagram and Facebook only show *public* posts. YouTube plays muted.
 - **Video plus a ticker, or ads on the side:** use the **Layouts** tab, then pick the layout for your screen.
