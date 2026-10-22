@@ -60,6 +60,12 @@ Screens stay in step by deriving the current item from the server clock, so give
 
 We are not claiming parity everywhere: the last row is the roadmap. Where OpenSign wins today is cost, openness, hardware choice, beginner setup and the features marked bold.
 
+## Branding
+The admin is branded for myT Mobiles (logo at `server/public/brand/myt-logo.png`, brand pink `#F23088` on black/charcoal). Technical names stay `OpenSign` (package, Android app id, discovery protocol). To use another logo, replace that PNG (a PNG with a black background blends best).
+
+## Tests
+`cd server && npm test` runs the server regression tests. CI runs them on every pull request.
+
 ## Notes
 - Schedules are evaluated on the TV, so they keep working offline. The player re-syncs every 60 s.
 - Auto-start on boot: Android 10+ restricts background activity launches, so some devices need "Display over other apps" granted, or the app set as the home/launcher app.

@@ -535,7 +535,7 @@ app.listen(PORT, () => {
 });
 
 // Lets TV players find the server with no typing: they broadcast "OPENSIGN?" and we answer with our port.
-const DISCOVERY_PORT = 41234;
+const DISCOVERY_PORT = Number(process.env.DISCOVERY_PORT ?? 41234); // 0 disables auto-discovery (used by tests)
 const udp = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 udp.on('message', (msg, rinfo) => {
   if (msg.toString().trim() !== 'OPENSIGN?') return;
@@ -544,4 +544,4 @@ udp.on('message', (msg, rinfo) => {
   udp.send(reply, rinfo.port, rinfo.address);
 });
 udp.on('error', (e) => console.warn('Auto-discovery disabled:', e.message));
-udp.bind(DISCOVERY_PORT);
+if (DISCOVERY_PORT) udp.bind(DISCOVERY_PORT);
