@@ -6,12 +6,14 @@ OpenSign: open-source digital signage (MagicINFO alternative). `server/` is a No
 ```bash
 cd server && npm install && npm start          # http://localhost:3000 (env: PORT, DATA_DIR, ADMIN_PASSWORD, PUBLIC_URL)
 PORT=3055 DATA_DIR=$TMPDIR/os node server/index.js   # throwaway instance for manual/API checks
-node --check server/index.js                    # server "lint" (also run by CI)
+node --check server/index.js                    # server syntax check (also run by CI)
+cd server && npm test                           # server tests (node:test, no extra deps; also run by CI)
+cd server && node --test --test-name-pattern="video wall"   # run a single test by name
 cd player && gradle :app:compileDebugKotlin     # Android compile check (CI only, see Gotchas)
 cd player && gradle assembleRelease             # signed APK (CI only, after merge)
 docker compose up -d                            # server in Docker (host networking)
 ```
-There is no test suite, linter or formatter. There is no single-test command.
+There is no linter or formatter. Android has no tests. Server tests live in `server/test/` and start a throwaway server on a random port.
 
 # Architecture
 - Server is one file (`server/index.js`) with a JSON store (`DATA_DIR/db.json`, atomic write). Proof-of-play goes to append-only `plays.ndjson`.
@@ -31,7 +33,7 @@ There is no test suite, linter or formatter. There is no single-test command.
 - Features must stay beginner-friendly: no new mandatory configuration or manual setup steps for end users.
 
 # Workflow
-- Before saying a change is done, `node --check server/index.js` must pass for server changes.
+- Before saying a change is done, `node --check server/index.js` and `cd server && npm test` must pass for server changes. Add a test for each new server endpoint.
 - Android changes must pass the CI `checks` job (compile). You must say plainly that nothing was run on a device.
 - Server behaviour changes must be exercised against a throwaway instance (`DATA_DIR`/`PORT` set), never `server/data`.
 

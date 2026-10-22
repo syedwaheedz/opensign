@@ -23,6 +23,14 @@ jobs:
       - name: Check server syntax
         run: node --check server/index.js
 
+      - name: Install server dependencies
+        run: npm ci
+        working-directory: server
+
+      - name: Run server tests
+        run: npm test
+        working-directory: server
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
