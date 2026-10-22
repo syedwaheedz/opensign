@@ -1,5 +1,6 @@
 // Posters tab: create a poster from a product, preview, approve, export, publish to the media library and a playlist.
 // Uses helpers from index.html (api, $, esc, render, load, tab) and products.js (products), and poster-render.js (renderPoster...).
+let pickCat = null, addPl = null; // inline pickers (no pop-up boxes)
 let posters = [], posterMeta = null, posterEdit = null, posterInfo = null, posterBusy = '', posterMsg = '', posterSel = new Set();
 let slide = { template: 'flagship', size: 'landscape', category: 'Latest smartphones', brand: '', newOnly: true };
 const dataCache = new Map(); // productId -> poster-data (cleared on every load)
@@ -50,7 +51,8 @@ function renderPosters() {
       <button onclick="selectAllPosters()">Select all shown</button>
       <button onclick="approveSelected()" ${posterBusy || !sel.length ? 'disabled' : ''}>Approve selected</button>
       <button onclick="publishSelected()" ${posterBusy || !sel.length ? 'disabled' : ''}>Add selected to media library</button>
-      <button class="primary" onclick="buildCategoryPlaylist()" ${posterBusy ? 'disabled' : ''}>Build playlist for category…</button></div>
+      <button class="primary" onclick="openCatPicker()" ${posterBusy ? 'disabled' : ''}>Build playlist for category…</button></div>
+    ${pickCat !== null ? categoryPicker() : ''}
     <div class="grid pgrid2">${shownPosters().map((po) => `<div class="thumb"><div class="pic" style="height:auto;aspect-ratio:${POSTER_SIZES[po.size].w}/${POSTER_SIZES[po.size].h}"><canvas class="pthumb" data-id="${po.id}" style="width:100%;height:100%"></canvas></div>
       <div class="meta"><label><input type="checkbox" ${posterSel.has(po.id) ? 'checked' : ''} onchange="togglePosterSel('${po.id}',this.checked)"> <b>${esc(po.productName || 'Store brand')}</b></label><br>
       <small>${POSTER_TEMPLATES[po.template]} · ${po.size}${po.category ? ' · ' + esc(po.category) : ''}</small><br>${posterStatus(po)}
@@ -124,17 +126,51 @@ async function publishSelected() {
   await loadPosters(); render();
 }
 
+// ---- build a playlist for a category (inline picker) -------------------------------------------------------
+function catStats(category) {
+  const list = posters.filter((p) => p.category === category);
+  const ready = list.filter((p) => p.status === 'approved' && !p.needsReview && !p.retired && p.mediaId);
+  return {
+    total: list.length, ready,
+    approved: list.filter((p) => p.status === 'approved' && !p.needsReview && !p.retired).length,
+    review: list.filter((p) => p.needsReview || p.retired).length,
+  };
+}
+
+/** Says which step is missing, in plain words. */
+function catAdvice(category) {
+  const st = catStats(category);
+  if (st.ready.length) return { ok: true, text: `${st.ready.length} poster${st.ready.length === 1 ? ' is' : 's are'} ready. A playlist will be created or updated with them (10 seconds each).` };
+  if (!st.total) {
+    return { ok: false, text: category === 'myT Mobiles store branding'
+      ? 'No posters have this category yet. Click “+ New poster”, choose the Store brand template, set the category to “myT Mobiles store branding”, then approve it and add it to the media library.'
+      : 'No posters have this category yet. Use “Create a slideshow from products” above (it sets the category from its last dropdown), or open a poster and set its category.' };
+  }
+  if (st.review) return { ok: false, text: `${st.total} poster${st.total === 1 ? '' : 's'} here, but ${st.review} changed since approval or ${st.review === 1 ? 'was' : 'were'} removed. Open ${st.review === 1 ? 'it' : 'them'}, check the preview, approve again and add to the media library again.` };
+  if (!st.approved) return { ok: false, text: `${st.total} poster${st.total === 1 ? '' : 's'} here, but none are approved. Select them and click “Approve selected”.` };
+  return { ok: false, text: `${st.approved} poster${st.approved === 1 ? ' is' : 's are'} approved but not in the media library. Select them and click “Add selected to media library”.` };
+}
+
+function openCatPicker() { pickCat = posterMeta.categories.includes(slide.category) && catStats(slide.category).total ? slide.category : (posterMeta.categories.find((c) => catStats(c).total) || posterMeta.categories[0]); render(); }
+function closeCatPicker() { pickCat = null; render(); }
+function categoryPicker() {
+  const adv = catAdvice(pickCat);
+  return `<div class="card"><h2>Build a playlist</h2><div class="row">
+    <select onchange="pickCat=this.value;render()">${posterMeta.categories.map((c) => { const st = catStats(c); return `<option value="${esc(c)}" ${c === pickCat ? 'selected' : ''}>${esc(c)} — ${st.ready.length} ready of ${st.total}</option>`; }).join('')}</select>
+    <button class="primary" onclick="buildCategoryPlaylist()" ${adv.ok ? '' : 'disabled'}>Build playlist</button><button onclick="closeCatPicker()">Cancel</button></div>
+    <p style="margin:8px 0 0;${adv.ok ? '' : 'color:#f5b84c'}">${esc(adv.text)}</p>
+    <small>“Ready” means approved and already in the media library.</small></div>`;
+}
+
 async function buildCategoryPlaylist() {
-  const cat = prompt('Category for the playlist:\n' + posterMeta.categories.map((c, i) => `${i + 1}. ${c}`).join('\n') + '\n\nType the number.', '1');
-  const category = posterMeta.categories[Number(cat) - 1];
-  if (!category) return;
-  const ready = posters.filter((p) => p.category === category && p.status === 'approved' && !p.needsReview && !p.retired && p.mediaId)
-    .sort((a, b) => a.productName.localeCompare(b.productName));
-  if (!ready.length) { posterMsg = `No approved posters in “${esc(category)}” are in the media library yet.`; return render(); }
-  const name = `myT Mobiles – ${category}`;
+  const category = pickCat;
+  const ready = catStats(category).ready.sort((a, b) => a.productName.localeCompare(b.productName));
+  if (!ready.length) return render();
+  const name = `myT Mobiles – ${category.replace(/^myT Mobiles /, '')}`; // avoid repeating the store name
   const lists = await api('/playlists');
   const pl = lists.find((l) => l.name === name) || await api('/playlists', { method: 'POST', body: { name } });
   await api(`/playlists/${pl.id}`, { method: 'PUT', body: { name, items: ready.map((p) => ({ mediaId: p.mediaId, duration: 10 })) } });
+  pickCat = null;
   posterMsg = `Playlist <b>${esc(name)}</b> now has ${ready.length} poster${ready.length === 1 ? '' : 's'} (10 seconds each). Next: open <b>Screens</b> and choose it as a screen's default content.`;
   render();
 }
@@ -146,12 +182,14 @@ async function deletePoster(id) {
 
 // ---- editor ------------------------------------------------------------------------------------------------------
 async function newPoster() {
+  addPl = null;
   const p = products.find((x) => x.images.length) || products[0];
   posterEdit = { id: null, productId: p?.id || null, template: 'flagship', size: 'landscape', category: '', texts: { headline: '', tagline: '', footer: '' }, image: { file: p ? bestImage(p) : '', zoom: 100, offsetX: 0, offsetY: 0 }, options: { showSpecs: true, showPrice: true, showOffers: true, variantIndex: 0 }, status: 'draft', dirty: true };
   posterInfo = await dataFor(posterEdit.productId);
   render();
 }
 async function editPoster(id) {
+  addPl = null;
   posterEdit = JSON.parse(JSON.stringify(posters.find((p) => p.id === id))); posterEdit.dirty = false;
   posterInfo = await dataFor(posterEdit.productId);
   render();
@@ -227,7 +265,13 @@ function renderPosterEditor() {
         ${posterMsg ? `<div style="margin-top:8px">${posterMsg}</div>` : ''}${po.mediaId ? playlistAdder() : ''}</div></div></div>`;
 }
 
-function playlistAdder() { return '<div class="row" style="margin-top:8px"><button onclick="addPosterToPlaylist()">Add to a playlist…</button><small>Then choose that playlist for a screen under Screens.</small></div>'; }
+function playlistAdder() {
+  if (!addPl) return '<div class="row" style="margin-top:8px"><button onclick="openPlaylistAdder()">Add to a playlist…</button><small>Then choose that playlist for a screen under Screens.</small></div>';
+  return `<div class="row" style="margin-top:8px"><select id="addPlSel" onchange="addPl.sel=this.value;render()">${addPl.lists.map((l) => `<option value="${l.id}" ${addPl.sel === l.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}<option value="" ${addPl.sel === '' ? 'selected' : ''}>New playlist…</option></select>
+    ${addPl.sel === '' ? '<input id="addPlName" placeholder="New playlist name" value="myT Mobiles posters">' : ''}
+    <button class="primary" onclick="addPosterToPlaylist()">Add</button><button onclick="addPl=null;render()">Cancel</button></div>`;
+}
+async function openPlaylistAdder() { const lists = await api('/playlists'); addPl = { lists, sel: lists[0]?.id || '' }; render(); }
 
 async function savePoster(approve) {
   const po = posterEdit;
@@ -261,12 +305,11 @@ async function posterToLibrary() {
   render();
 }
 async function addPosterToPlaylist() {
-  const lists = await api('/playlists');
-  const pick = prompt('Add to which playlist?\n' + lists.map((l, i) => `${i + 1}. ${l.name}`).join('\n') + '\n\nType a number, or type a new playlist name.', lists.length ? '1' : 'myT Mobiles posters');
-  if (!pick) return;
-  const existing = lists[Number(pick) - 1];
-  const pl = existing || await api('/playlists', { method: 'POST', body: { name: pick } });
+  const name = ($('#addPlName')?.value || '').trim();
+  if (addPl.sel === '' && !name) return alert('Type a name for the new playlist.');
+  const pl = addPl.sel ? addPl.lists.find((l) => l.id === addPl.sel) : await api('/playlists', { method: 'POST', body: { name } });
   if (!pl.items.some((i) => i.mediaId === posterEdit.mediaId)) pl.items.push({ mediaId: posterEdit.mediaId, duration: 10 });
   await api('/playlists/' + pl.id, { method: 'PUT', body: { items: pl.items } });
+  addPl = null;
   posterMsg = `Added to playlist <b>${esc(pl.name)}</b>. Next: choose it for a screen under <b>Screens</b>.`; render();
 }

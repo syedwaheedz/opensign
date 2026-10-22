@@ -10,7 +10,7 @@ This guide is for myT Mobiles staff. It explains how to turn phones from the cat
 5. Look at each preview. Change the text, image position or template if needed.
 6. Select the posters. Click **Approve selected**.
 7. Click **Add selected to media library**. Each poster becomes a normal image in **Media**.
-8. Click **Build playlist for category…**. Type the number of the category. A playlist is created with 10 seconds for each poster.
+8. Click **Build playlist for category…**. Choose the category in the list. The list shows how many posters are ready in each category, and a message tells you what is missing if none are. Click **Build playlist**. A playlist is created with 10 seconds for each poster.
 9. Open **Screens**. Choose the playlist as the screen's **Default content**. The TV plays the posters.
 
 ## Templates and sizes
