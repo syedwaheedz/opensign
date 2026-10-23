@@ -70,9 +70,25 @@ function selectAllPosters() { shownPosters().forEach((p) => posterSel.add(p.id))
 
 async function posterAfterRender() {
   if (posterEdit) return drawPreview();
-  for (const c of document.querySelectorAll('canvas.pthumb')) {
+  // A published poster already exists as a finished image in the media library: show that (fast). Only posters that
+  // are drafts, changed since publishing, or not published yet are drawn from their design.
+  const toDraw = [];
+  await Promise.all([...document.querySelectorAll('canvas.pthumb')].map(async (c) => {
     const po = posters.find((p) => p.id === c.dataset.id);
-    if (!po || !c.isConnected) continue;
+    if (!po) return;
+    const m = po.status === 'approved' && !po.needsReview && po.mediaId && po.publishedHash && po.publishedHash === po.approvedHash ? media.find((x) => x.id === po.mediaId) : null;
+    if (m?.file) {
+      try {
+        const img = new Image(); img.src = `/media/${m.file}`; await img.decode();
+        c.width = 360; c.height = Math.round(360 * POSTER_SIZES[po.size].h / POSTER_SIZES[po.size].w);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        return;
+      } catch { /* fall through and draw it */ }
+    }
+    toDraw.push([c, po]);
+  }));
+  for (const [c, po] of toDraw) {
+    if (!c.isConnected) continue;
     try { await renderPoster(c, specOf(po, await dataFor(po.productId)), 360 / POSTER_SIZES[po.size].w); } catch { /* an image may be missing */ }
   }
 }

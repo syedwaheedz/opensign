@@ -170,3 +170,26 @@ test('open registration is capped so a flood of fake screens cannot fill the ser
     assert.equal((await capped.post('/api/player/register', { deviceId: 'flood-0' })).status, 200); // a known screen still gets through
   } finally { capped.stop(); }
 });
+
+test('proof of play: monthly files, old files swept at start-up, and an old file is not read for a recent report', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opensign-plays-'));
+  const old = path.join(dir, 'plays-2019-01.ndjson');
+  fs.writeFileSync(old, '{"o":"x","d":"d","i":"i","n":"old","t":1546300800000,"ms":1000}\n');
+  const longAgo = new Date('2019-02-01');
+  fs.utimesSync(old, longAgo, longAgo);
+  const r = await startServer({}, { dataDir: dir });
+  try {
+    assert.equal(fs.existsSync(old), false, 'a file older than the retention period is deleted at start-up');
+    await r.login();
+    const dev = await r.pairDevice('plays-tv');
+    await fetch(`${r.base}/api/player/plays-tv/heartbeat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plays: [{ itemId: 'm', name: 'Now', start: Date.now() - 500, ms: 4000 }] }) });
+    const month = new Date().toISOString().slice(0, 7);
+    assert.ok(fs.existsSync(path.join(dir, `plays-${month}.ndjson`)), 'plays go to this month\'s file');
+    assert.equal(fs.existsSync(path.join(dir, 'plays.ndjson')), false);
+    assert.equal((await r.call('GET', '/api/reports/plays?days=1')).body.total, 1);
+    assert.ok(dev.id);
+  } finally { r.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

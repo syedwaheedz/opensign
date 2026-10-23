@@ -155,7 +155,8 @@ async function start() {
   $('#login').hidden = true; $('#app').hidden = false;
   buildNav();
   load(); clearInterval(timer);
-  timer = setInterval(() => { if ((tab === 'devices' || tab === 'reports') && !document.activeElement.closest('#view')) load(); }, 15000);
+  let tick = 0; // screens refresh every 15 s; the heavier reports every minute
+  timer = setInterval(() => { tick++; if ((tab === 'devices' || (tab === 'reports' && tick % 4 === 0)) && !document.activeElement.closest('#view')) load(); }, 15000);
 }
 function render() {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));

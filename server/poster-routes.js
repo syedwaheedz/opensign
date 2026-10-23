@@ -56,6 +56,8 @@ export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bu
     for (const orgId of changedOrgs) bumpOrg(orgId);
     return changedOrgs.size > 0;
   }
+  // Posters published before the library image was tracked: treat the approved design as the published one.
+  for (const po of db.posters) if (po.mediaId && po.status === 'approved' && po.approvedHash && !po.publishedHash && !po.retiredAt) po.publishedHash = po.approvedHash;
   hooks.retireStale = retireStale;
   setInterval(retireStale, 60_000).unref();
 
@@ -161,6 +163,7 @@ export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bu
     const name = `${v.productName || 'Store'} poster`;
     let m = db.media.find((x) => x.id === po.mediaId && x.orgId === po.orgId);
     po.retiredAt = null; // published again after review
+    po.publishedHash = po.approvedHash; // the design the library image shows (lets the admin reuse that image as the thumbnail)
     if (m) { // keep the same media id so playlists that use it keep working
       if (m.file) fs.rmSync(path.join(MEDIA_DIR, m.file), { force: true });
       Object.assign(m, { file: req.file.filename, size: req.file.size, name });
