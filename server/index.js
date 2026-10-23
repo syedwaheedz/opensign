@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import dgram from 'node:dgram';
 import os from 'node:os';
+import readline from 'node:readline';
 import { registerCatalogRoutes } from './catalog-routes.js';
 import { registerPosterRoutes } from './poster-routes.js';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,18 @@ const PUBLIC_URL = process.env.PUBLIC_URL; // optional, e.g. http://192.168.1.10
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const MEDIA_DIR = path.join(DATA_DIR, 'media');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
-const PLAYS_FILE = path.join(DATA_DIR, 'plays.ndjson'); // append-only proof-of-play log
+// Proof of play is an append-only log, one file per month (plays-YYYY-MM.ndjson), so a report reads only the months it
+// needs. The older single file plays.ndjson (from before monthly files) is still read. Old months are deleted after
+// PLAYS_RETENTION_DAYS (default 400).
+const playsFileFor = (t) => path.join(DATA_DIR, `plays-${new Date(t).toISOString().slice(0, 7)}.ndjson`);
+const PLAYS_RETENTION_DAYS = Number(process.env.PLAYS_RETENTION_DAYS) || 400;
+const playFiles = () => fs.readdirSync(DATA_DIR).filter((f) => /^plays(-\d{4}-\d{2})?\.ndjson$/.test(f)).map((f) => path.join(DATA_DIR, f));
+function sweepOldPlays() {
+  const cutoff = Date.now() - PLAYS_RETENTION_DAYS * 86400000;
+  for (const f of playFiles()) if (fs.statSync(f).mtimeMs < cutoff) fs.rmSync(f, { force: true }); // nothing in it is newer than its last write
+}
+sweepOldPlays();
+setInterval(sweepOldPlays, 24 * 3600e3).unref();
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 // ---- tiny JSON store -------------------------------------------------------
@@ -264,7 +276,7 @@ app.post('/api/player/:deviceId/heartbeat', (req, res) => {
   const lines = plays
     .filter((p) => typeof p?.itemId === 'string' && Number.isFinite(p.start) && Number.isFinite(p.ms))
     .map((p) => JSON.stringify({ o: d.orgId, d: d.id, i: p.itemId, n: String(p.name || '').slice(0, 200), t: Math.round(p.start), ms: Math.round(p.ms) }));
-  if (lines.length && d.orgId) fs.appendFileSync(PLAYS_FILE, lines.join('\n') + '\n');
+  if (lines.length && d.orgId) fs.appendFileSync(playsFileFor(Date.now()), lines.join('\n') + '\n');
   save();
   res.json({ ok: true });
 });
@@ -525,20 +537,30 @@ api.delete('/alert', (req, res) => {
 });
 
 // ---- proof of play (only this store's lines) ----
-function readPlays(days, orgId) {
-  if (!fs.existsSync(PLAYS_FILE)) return [];
-  const since = Date.now() - days * 86400000;
-  return fs.readFileSync(PLAYS_FILE, 'utf8').split('\n').filter(Boolean).flatMap((l) => {
-    try {
-      const p = JSON.parse(l);
-      const mineLine = p.o ? p.o === orgId : db.legacyOrgId === orgId; // lines from before stores existed have no "o"
-      return p.t >= since && mineLine ? [p] : [];
-    } catch { return []; }
-  });
+// Reports stream the log files instead of loading them whole, skip files that cannot hold the period, and skip other
+// stores' lines before parsing them. Results are kept for a few seconds, because the admin refreshes reports by itself.
+const playsCache = new Map(); // "orgId|days" -> { at, rows }
+async function readPlays(days, orgId) {
+  const key = `${orgId}|${days}`, hit = playsCache.get(key);
+  if (hit && Date.now() - hit.at < 10000) return hit.rows;
+  const since = Date.now() - days * 86400000, rows = [];
+  const mineMarker = `"o":"${orgId}"`, legacy = db.legacyOrgId === orgId;
+  for (const f of playFiles()) {
+    if (fs.statSync(f).mtimeMs < since) continue; // last written before the period: nothing relevant inside
+    const lines = readline.createInterface({ input: fs.createReadStream(f), crlfDelay: Infinity });
+    for await (const l of lines) {
+      if (!(l.includes(mineMarker) || (legacy && !l.includes('"o":')))) continue; // other stores' lines, and lines from before stores existed
+      try { const p = JSON.parse(l); if (p.t >= since) rows.push(p); } catch { /* skip a damaged line */ }
+    }
+  }
+  playsCache.set(key, { at: Date.now(), rows });
+  if (playsCache.size > 200) playsCache.delete(playsCache.keys().next().value);
+  return rows;
 }
 const daysParam = (req) => Math.min(365, Math.max(1, Number(req.query.days) || 7));
-api.get('/reports/plays', (req, res) => {
-  const plays = readPlays(daysParam(req), req.orgId);
+const wrap = (fn) => (req, res) => fn(req, res).catch((e) => res.status(500).json({ error: e.message }));
+api.get('/reports/plays', wrap(async (req, res) => {
+  const plays = await readPlays(daysParam(req), req.orgId);
   const agg = (keyOf, nameOf) => {
     const m = new Map();
     for (const p of plays) {
@@ -553,13 +575,13 @@ api.get('/reports/plays', (req, res) => {
     byMedia: agg((p) => p.i, (p) => own(db.media, req, p.i)?.name || p.n),
     byScreen: agg((p) => p.d, (p) => own(db.devices, req, p.d)?.name || 'Removed screen'),
   });
-});
-api.get('/reports/plays.csv', (req, res) => {
+}));
+api.get('/reports/plays.csv', wrap(async (req, res) => {
   const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = readPlays(daysParam(req), req.orgId).map((p) =>
+  const rows = (await readPlays(daysParam(req), req.orgId)).map((p) =>
     [new Date(p.t).toISOString(), q(own(db.devices, req, p.d)?.name || p.d), q(own(db.media, req, p.i)?.name || p.n), (p.ms / 1000).toFixed(1)].join(','));
   res.type('text/csv').send(['time,screen,media,seconds', ...rows].join('\n') + '\n');
-});
+}));
 
 // ---- widgets: text, scrolling ticker and clock, rendered as pages (no design tools needed) ----
 api.post('/media/widget', (req, res) => {

@@ -40,6 +40,7 @@ test('a poster reaches the media library only after approval', async () => {
   assert.equal(lib.body.media.type, 'image');
   const media = (await s.call('GET', '/api/media')).body.find((m) => m.id === lib.body.media.id);
   assert.ok(media);
+  assert.equal(lib.body.poster.publishedHash, lib.body.poster.approvedHash); // lets the admin reuse the library image as the thumbnail
   assert.equal((await fetch(`${s.base}/media/${media.file}`)).status, 200);
 });
 
