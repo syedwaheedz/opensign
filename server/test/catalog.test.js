@@ -134,19 +134,19 @@ test('page parser reads variants (paise to rupees), highlights, specs and images
   assert.equal(p.images[0].url, 'http://localhost:1/shop/images/p/front.png');
 });
 
-test('import: disallowed hosts are refused', async () => {
+test('import: a store with no store website cannot import, and cannot pick its own address', async () => {
   const r = await s.call('POST', '/api/catalog/import', { url: 'https://evil.example.org/shop' });
   assert.equal(r.status, 400);
-  assert.match(r.body.error, /not an allowed import source/);
+  assert.match(r.body.error, /No store website/);
 });
 
 test('import: creates drafts with images, skips unchanged, and flags changed listings', async (t) => {
   const store = await fakeStore(30000);
-  const imp = await startServer({ IMPORT_ALLOWED_HOSTS: 'localhost' });
+  const imp = await startServer();
   t.after(() => { store.close(); imp.stop(); });
-  await imp.login();
+  await imp.login({ importSource: store.url }); // the platform administrator sets the store's website
   const run = async () => {
-    assert.equal((await imp.call('POST', '/api/catalog/import', { url: store.url })).status, 202);
+    assert.equal((await imp.call('POST', '/api/catalog/import', { url: 'https://evil.example.org/shop' })).status, 202); // the address in the request is ignored
     for (let i = 0; i < 100; i++) {
       const j = (await imp.call('GET', '/api/catalog/import')).body;
       if (!j.running && j.finishedAt) return j;

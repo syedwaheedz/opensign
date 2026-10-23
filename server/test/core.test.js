@@ -6,15 +6,17 @@ let s;
 before(async () => { s = await startServer(); });
 after(() => s.stop());
 
-test('first visitor sets the admin password; setup is then closed', async () => {
+test('first visitor becomes the platform administrator; setup is then closed', async () => {
   assert.deepEqual(await (await fetch(s.base + '/api/auth/status')).json(), { setupRequired: true });
-  const short = await fetch(s.base + '/api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: '123' }) });
-  assert.equal(short.status, 400);
-  assert.ok(await s.login());
-  const again = await fetch(s.base + '/api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'another1' }) });
-  assert.equal(again.status, 403);
-  const wrong = await fetch(s.base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'nope' }) });
-  assert.equal(wrong.status, 401);
+  assert.equal((await s.post('/api/auth/setup', { login: 'root', password: '1234567' })).status, 400); // too short
+  assert.equal((await s.post('/api/auth/setup', { login: 'a b', password: '12345678' })).status, 400); // no spaces
+  assert.equal((await s.post('/api/auth/setup', { login: 'root', password: '12345678' })).status, 200);
+  assert.equal((await s.post('/api/auth/setup', { login: 'other', password: '12345678' })).status, 403);
+  assert.equal((await s.post('/api/auth/login', { login: 'root', password: 'wrong-password' })).status, 401);
+  assert.equal((await s.post('/api/auth/login', { login: 'ROOT', password: '12345678' })).status, 200); // logins ignore case
+  assert.deepEqual(await (await fetch(s.base + '/api/auth/status')).json(), { setupRequired: false });
+  await s.usePlatform('root', '12345678');
+  await s.login();
 });
 
 test('admin API rejects requests without a token', async () => {

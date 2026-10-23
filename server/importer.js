@@ -1,23 +1,19 @@
-// Reads smartphones from the myT Mobiles online store (the owner's own site) so staff do not retype them.
+// Reads smartphones from a store's own online shop so staff do not retype them.
+// The page parser fits the shop software the first store uses (a Next.js shop with schema.org data). Other shops may need an adapter.
 // This module only fetches and parses. Saving is done by catalog-routes.js.
 // It runs on the server when an admin clicks "Import from store website". The TV player never calls it.
 import crypto from 'node:crypto';
 
-export const DEFAULT_STORE = 'https://storetmobiles2-code.github.io/mytmobiles-web';
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
-/** The import may only read from hosts the owner allows. Default: the myT Mobiles store. */
-export function allowedHosts() {
-  return (process.env.IMPORT_ALLOWED_HOSTS || 'storetmobiles2-code.github.io').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
-}
-
+/**
+ * The import reads only the address the platform administrator set for the store (never one typed by a store user).
+ * This check just confirms that address is a usable http(s) address.
+ */
 export function checkStoreUrl(raw) {
   let u;
-  try { u = new URL(raw); } catch { throw Object.assign(new Error('Enter a full store address, e.g. https://example.com/shop'), { status: 400 }); }
+  try { u = new URL(raw); } catch { throw Object.assign(new Error('No store website is set up for this store. Ask the platform administrator.'), { status: 400 }); }
   if (!['http:', 'https:'].includes(u.protocol)) throw Object.assign(new Error('Only http(s) addresses are allowed'), { status: 400 });
-  if (!allowedHosts().includes(u.hostname.toLowerCase())) {
-    throw Object.assign(new Error(`${u.hostname} is not an allowed import source. Set IMPORT_ALLOWED_HOSTS to allow it.`), { status: 400 });
-  }
   return u.href.replace(/\/+$/, '');
 }
 

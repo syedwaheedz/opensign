@@ -7,7 +7,9 @@ You need: **a computer** (Windows, Mac, or a Raspberry Pi) that stays on, **an A
 2. Download this project (green **Code** button on GitHub, then **Download ZIP**) and unzip it.
 3. Double-click **`start.bat`** (Windows) or **`start.command`** (Mac).
 4. A window opens and shows an address like `http://192.168.1.20:3000`. Open it in your browser.
-5. Choose a password. That's your admin screen. Leave the computer window open.
+5. **Create the administrator**: type a login (your email is fine) and a password of 8 or more characters.
+6. Open **Platform**, type your store's name and tick **This is my own store**, then click **Create store**. You are now the owner of your store. (Running OpenSign for several stores? See `docs/PLATFORM.md`.)
+7. Keep the computer window open.
 
 ## Step 2 – Put the player app on your TV (one time per TV)
 1. On the TV, install the free **Downloader** app from the Google Play Store.
@@ -17,7 +19,7 @@ You need: **a computer** (Windows, Mac, or a Raspberry Pi) that stays on, **an A
 3. Open **OpenSign Player**. It finds your computer by itself and shows "Almost done!".
 
 ## Step 3 – Connect the screen
-In the admin, open **Screens**. Your TV is listed: click **Add this screen** and give it a name (e.g. "Lobby").
+In the admin, open **Screens**. Type the 6-digit code shown on the TV and give the screen a name (e.g. "Lobby"). If you are the only store on the server, the TV is also listed there: click **Add this screen**.
 
 ## Step 4 – Show something
 1. **Media** tab: upload pictures/videos, or paste a link (YouTube, Instagram, Facebook, or a web page) and click **Add link**.
@@ -26,8 +28,8 @@ In the admin, open **Screens**. Your TV is listed: click **Add this screen** and
 
 The TV updates within a minute. It keeps playing if the Wi-Fi drops, and starts again when the TV is switched on.
 
-## Phone posters (myT Mobiles)
-Open **Products**, import the phones and verify them. Then open **Posters**, create posters, approve them, add them to the media library and build a playlist. See `docs/MYT-MOBILES.md`.
+## Phone posters (optional feature)
+Open **Products**, import the phones and verify them. Then open **Posters**, create posters, approve them, add them to the media library and build a playlist. See `docs/PHONE-POSTERS.md`.
 
 ## Good to know
 - **Links need internet on the TV.** Instagram and Facebook only show *public* posts. YouTube plays muted.
@@ -38,4 +40,4 @@ Open **Products**, import the phones and verify them. Then open **Posters**, cre
   2. The TV and computer must be on the **same Wi-Fi/network** (not a guest network, and "client isolation" must be off on the router).
   3. When Windows or macOS asks whether to let **Node.js** accept incoming connections, choose **Allow**. If you clicked Deny, allow it in the firewall settings.
   4. Still stuck? Choose **Enter server address** on the TV screen (click it with the mouse or press OK), type the address shown in the OpenSign window (like `http://192.168.1.20:3000`) and choose Connect. In the Android Studio emulator use `http://10.0.2.2:3000`.
-- **Forgot the password?** Stop OpenSign, set the `ADMIN_PASSWORD` environment variable to a new one (it overrides the stored password) and start it again.
+- **Forgot the password?** Staff ask their store owner (Team > Reset password). Owners ask the platform administrator. The platform administrator can recover with the `PLATFORM_ADMIN_LOGIN` and `PLATFORM_ADMIN_PASSWORD` environment variables (see `docs/PLATFORM.md`).

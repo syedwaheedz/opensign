@@ -14,8 +14,12 @@ const POSTER_TEMPLATES = {
   flagship: 'Premium flagship', camera: 'Camera flagship', gaming: 'Gaming and performance',
   offer: 'Price and offer', launch: 'New launch', brand: 'Store brand',
 };
+// The store's own colour and name (ORG comes from the admin page). Nothing here is specific to one store.
+const accentColor = () => (typeof ORG !== 'undefined' && ORG?.accent) || '#4f8cff';
+const storeName = () => (typeof ORG !== 'undefined' && ORG?.name) || 'Our store';
+const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(',');
 const PFONT = '"Helvetica Neue", Helvetica, Arial, "Segoe UI", system-ui, sans-serif';
-const PC = { bg0: '#09090b', bg1: '#1a1a1f', text: '#f5f5f7', muted: '#a5a8b3', silver: '#cfd3dc', pink: '#f23088', cyan: '#19e6ff', violet: '#8a5cff' };
+const PC = { bg0: '#09090b', bg1: '#1a1a1f', text: '#f5f5f7', muted: '#a5a8b3', silver: '#cfd3dc', cyan: '#19e6ff', violet: '#8a5cff' };
 
 // ---- images -------------------------------------------------------------------------------------
 const _imgCache = new Map();
@@ -189,7 +193,7 @@ function specItems(d, keys) {
 
 function buildBlocks(ctx, spec, bw, land, k) {
   const d = spec.data || {}, o = spec.options, t = spec.texts;
-  const accent = { flagship: PC.silver, camera: PC.silver, gaming: PC.cyan, offer: PC.pink, launch: PC.pink, brand: PC.silver }[spec.template];
+  const accent = { flagship: PC.silver, camera: PC.silver, gaming: PC.cyan, offer: accentColor(), launch: accentColor(), brand: PC.silver }[spec.template];
   const headline = t.headline || (d.model || '');
   const blocks = [];
   const add = (b) => blocks.push(b);
@@ -224,7 +228,7 @@ function buildBlocks(ctx, spec, bw, land, k) {
   const lowPrice = () => priceVisible && add(textBlock(ctx, `From ${inr(variant.sellingPrice)}`, { size: 44 * k, weight: 600, color: PC.silver, maxW: bw }));
 
   if (spec.template === 'brand') {
-    add(textBlock(ctx, t.headline || 'Mobiles at honest prices', { size: 110 * k, weight: 700, maxW: bw, maxLines: 3, lh: 1.05, minSize: 50 * k }));
+    add(textBlock(ctx, t.headline || storeName(), { size: 110 * k, weight: 700, maxW: bw, maxLines: 3, lh: 1.05, minSize: 50 * k }));
     add(gap(14 * k));
     if (t.tagline) add(textBlock(ctx, t.tagline, { size: 42 * k, color: PC.muted, maxW: bw, maxLines: 3, lh: 1.25 }));
     return blocks;
@@ -265,8 +269,8 @@ function buildBlocks(ctx, spec, bw, land, k) {
     }
     offers(3); add(gap(18 * k)); sp(['camera', 'battery'], 2, 0.9);
   } else { // launch
-    add(pill(ctx, 'NEW LAUNCH', k, PC.pink)); add(gap(18 * k)); brandLine(); add(gap(8 * k)); title(2, 130); add(gap(12 * k));
-    const info = d.launchInfo || t.tagline || 'Now at myT Mobiles';
+    add(pill(ctx, 'NEW LAUNCH', k, accentColor())); add(gap(18 * k)); brandLine(); add(gap(8 * k)); title(2, 130); add(gap(12 * k));
+    const info = d.launchInfo || t.tagline || `Now at ${storeName()}`;
     add(textBlock(ctx, info, { size: 40 * k, color: PC.muted, maxW: bw, maxLines: 2, lh: 1.2 })); add(gap(24 * k));
     sp(['display', 'camera', 'processor', 'battery'], 2, 0.95); add(gap(18 * k)); lowPrice();
   }
@@ -290,7 +294,7 @@ function paintBackground(ctx, tpl, W, H, art) {
     ctx.save(); ctx.strokeStyle = PC.cyan; ctx.lineWidth = 3 * (W / 1080); ctx.globalAlpha = 0.9;
     ctx.beginPath(); ctx.moveTo(0, H * 0.965); ctx.lineTo(W * 0.62, H * 0.965); ctx.stroke();
     ctx.strokeStyle = PC.violet; ctx.beginPath(); ctx.moveTo(W * 0.62, H * 0.965); ctx.lineTo(W, H * 0.965); ctx.stroke(); ctx.restore();
-  } else if (tpl === 'offer' || tpl === 'launch') glow('rgba(242,48,136,A)', 0.20);
+  } else if (tpl === 'offer' || tpl === 'launch') glow(`rgba(${hexRgb(accentColor())},A)`, 0.20);
   else glow('rgba(214,218,228,A)', 0.12);
   // fine metallic frame line
   ctx.strokeStyle = 'rgba(207,211,220,0.14)'; ctx.lineWidth = 2 * (W / 1080);
@@ -318,8 +322,26 @@ async function drawPhone(ctx, spec, art) {
   ctx.restore();
 }
 
-let _logo = null;
-async function logoImg() { if (!_logo) _logo = await loadImg('/brand/myt-logo.png'); return _logo; }
+/** The store's logo image, or null when it has none (then the store name is drawn as text). */
+async function logoImg() {
+  const url = typeof ORG !== 'undefined' ? ORG?.logoUrl : '';
+  if (!url) return null;
+  try { return await loadImg(url); } catch { return null; }
+}
+
+/** Draws the logo (or the store name as text) with its left edge at x and height h. Returns the width used. */
+function drawMark(ctx, logo, x, y, h, measureOnly = false) {
+  if (logo) {
+    const w = h * (logo.naturalWidth / logo.naturalHeight);
+    if (!measureOnly) { ctx.save(); ctx.globalCompositeOperation = 'lighten'; ctx.drawImage(logo, x, y, w, h); ctx.restore(); } // a black logo background blends away
+    return w;
+  }
+  const size = h * 0.62;
+  setFont(ctx, size, 800);
+  const w = ctx.measureText(storeName()).width;
+  if (!measureOnly) { ctx.fillStyle = PC.text; ctx.textBaseline = 'middle'; ctx.fillText(storeName(), x, y + h / 2); ctx.fillStyle = accentColor(); ctx.fillRect(x, y + h * 0.88, Math.min(w, h * 1.2), Math.max(3, h * 0.05)); ctx.textBaseline = 'top'; }
+  return w;
+}
 
 // ---- main ------------------------------------------------------------------------------------------------------
 // Renders share one drawing context variable, so they run one at a time.
@@ -349,8 +371,10 @@ async function drawPoster(canvas, spec, scale = 1) {
   paintBackground(ctx, spec.template, W, H, art);
   if (spec.template !== 'brand') await drawPhone(ctx, spec, art);
   else { // store brand slide: the logo is the hero
-    const bh = Math.min(art.h * 0.55, (art.w * 0.8) / (logo.naturalWidth / logo.naturalHeight)), bw2 = bh * (logo.naturalWidth / logo.naturalHeight);
-    ctx.save(); ctx.globalCompositeOperation = 'lighten'; ctx.drawImage(logo, art.x + (art.w - bw2) / 2, art.y + (art.h - bh) / 2, bw2, bh); ctx.restore();
+    let bh = Math.min(art.h * 0.55, logo ? (art.w * 0.8) / (logo.naturalWidth / logo.naturalHeight) : art.h * 0.4);
+    let bw2 = drawMark(ctx, logo, 0, 0, bh, true);
+    if (!logo && bw2 > art.w * 0.9) { bh *= (art.w * 0.9) / bw2; bw2 = drawMark(ctx, logo, 0, 0, bh, true); } // a long store name is scaled to fit
+    drawMark(ctx, logo, art.x + (art.w - bw2) / 2, art.y + (art.h - bh) / 2, bh);
   }
 
   // text blocks: shrink everything a little at a time until the stack fits its box
@@ -365,10 +389,10 @@ async function drawPoster(canvas, spec, scale = 1) {
   for (const b of blocks) { b.draw(copy.x, y, copy.w); y += b.h; }
 
   // footer: logo (black background blended away) and optional text
-  const lh = footH * 0.62, lw = lh * (logo.naturalWidth / logo.naturalHeight);
+  const lh = footH * 0.62, lw = drawMark(ctx, logo, 0, 0, lh, true);
   const fy = H - footH * 0.5 - lh / 2 - (land ? H * 0.02 : H * 0.012);
   const lx = land ? copy.x : W * 0.07;
-  ctx.save(); ctx.globalCompositeOperation = 'lighten'; ctx.drawImage(logo, lx, fy, lw, lh); ctx.restore();
+  drawMark(ctx, logo, lx, fy, lh);
   if (spec.texts.footer) {
     setFont(ctx, 30 * k, 500); ctx.fillStyle = PC.muted; ctx.textBaseline = 'middle'; ctx.textAlign = land ? 'left' : 'right';
     ctx.fillText(spec.texts.footer, land ? lx + lw + 30 * k : W * 0.93, fy + lh / 2);

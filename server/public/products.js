@@ -34,9 +34,9 @@ function renderProducts() {
     ? `<div class="muted">Importing… read ${j.read || 0} of ${j.total || '?'} pages · ${j.imported} new · ${j.updated} changed · ${j.images} images</div>`
     : j?.finishedAt ? `<small>Last import: ${j.imported} new, ${j.updated} changed, ${j.unchanged} unchanged, ${j.images} images${j.errors.length ? `, <span style="color:var(--bad)">${j.errors.length} problem(s)</span>` : ''}.</small>` : '';
   return `<div class="card"><div class="row"><h2 class="grow" style="margin:0">Smartphone catalog</h2>
-      <button onclick="importStore()" ${j?.running ? 'disabled' : ''}>Import from store website</button>
+      ${prodMeta.importSource ? `<button onclick="importStore()" ${j?.running ? 'disabled' : ''}>Import from store website</button>` : ''}
       <button class="primary" onclick="newProduct()">+ New product</button></div>
-    <small>Imported products start as <b>Draft</b>. Prices and offers appear on posters only after staff verify the product. Source: ${esc(prodMeta.defaultStore)}</small>
+    <small>Imported products start as <b>Draft</b>. Prices and offers appear on posters only after staff verify the product. ${prodMeta.importSource ? 'Source: ' + esc(prodMeta.importSource) : 'No store website is set up for importing. Add products by hand, or ask the platform administrator to set the import address.'}</small>
     <div style="margin-top:6px">${imp}</div>${j?.errors?.length && !j.running ? `<details><summary><small>Show problems</small></summary><small>${j.errors.map(esc).join('<br>')}</small></details>` : ''}</div>
     <div class="card row"><input id="pq" placeholder="Search brand or model" value="${esc(prodFilter.q)}" class="grow" onchange="prodFilter.q=this.value;load()">
       <select onchange="prodFilter.brand=this.value;load()"><option value="">All brands</option>${prodMeta.brands.map((b) => `<option ${prodFilter.brand === b ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>
@@ -109,7 +109,7 @@ function renderProductEdit() {
       <small>${p.sourceCheckedOn ? 'Source read on ' + p.sourceCheckedOn : ''}</small></div></div>
 
     <div class="card"><div class="row"><h2 class="grow" style="margin:0">Variants and prices</h2><button onclick="prodDraft.variants.push({ram:'',storage:'',officialPrice:null,sellingPrice:null});render()">+ Variant</button></div>
-      <small>Official price = brand MRP / launch price. Selling price = myT Mobiles price. Offers are separate and never change these.</small>
+      <small>Official price = brand MRP / launch price. Selling price = your store's price. Offers are separate and never change these.</small>
       ${p.variants.map((v, i) => `<div class="row" style="margin-top:8px"><input style="width:90px" placeholder="RAM" value="${esc(v.ram)}" oninput="pdv(${i},'ram',this.value)">
         <input style="width:100px" placeholder="Storage" value="${esc(v.storage)}" oninput="pdv(${i},'storage',this.value)">
         <input style="width:120px" placeholder="Colour" value="${esc(v.colour || '')}" oninput="pdv(${i},'colour',this.value)">

@@ -3,15 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>myT Mobiles Signage</title>
-<link rel="icon" href="/brand/myt-logo.png">
+<title>OpenSign</title>
+<link id="favicon" rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c0c0e'/%3E%3Crect x='6' y='9' width='20' height='13' rx='2' fill='none' stroke='%234f8cff' stroke-width='2.5'/%3E%3Crect x='12' y='24' width='8' height='2.5' rx='1' fill='%234f8cff'/%3E%3C/svg%3E">
 <meta name="theme-color" content="#0c0c0e">
 <style>
-  /* myT Mobiles brand: black/charcoal, white type, brand pink (#F23088) as the one accent, restrained silver for metallic touches. */
-  :root { color-scheme:dark; --bg:#0c0c0e; --card:#151518; --text:#f4f4f6; --muted:#9a9aa6; --line:#2a2a30; --accent:#f23088; --metal:linear-gradient(135deg,#f5f6f8 0%,#aeb3bd 45%,#e8eaee 70%,#8b909b 100%); --ok:#3ecf8e; --bad:#ff5d6c; }
+  /* Dark theme. The accent colour is set per store (see applyBranding); silver is the restrained metallic touch. */
+  :root { color-scheme:dark; --bg:#0c0c0e; --card:#151518; --text:#f4f4f6; --muted:#9a9aa6; --line:#2a2a30; --accent:#4f8cff; --metal:linear-gradient(135deg,#f5f6f8 0%,#aeb3bd 45%,#e8eaee 70%,#8b909b 100%); --ok:#3ecf8e; --bad:#ff5d6c; }
   * { box-sizing:border-box } body { margin:0; font:14px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--text) }
   header { display:flex; align-items:center; gap:24px; padding:0 20px; height:60px; background:var(--card); border-bottom:1px solid var(--line) }
   .brand { display:flex; align-items:center; gap:12px }
+  .wordmark { font-size:19px; font-weight:700; letter-spacing:.01em } .who { color:var(--muted); font-size:12px; white-space:nowrap }
   .logo { height:40px; width:auto; mix-blend-mode:lighten } /* the logo file has a black background */
   .product { font-size:11px; letter-spacing:.22em; text-transform:uppercase; background:var(--metal); -webkit-background-clip:text; background-clip:text; color:transparent }
   nav { display:flex; gap:4px; flex:1; overflow-x:auto }
@@ -48,43 +49,50 @@
 </head>
 <body>
 <div id="login" class="card" hidden>
-  <img class="logo" src="/brand/myt-logo.png" alt="myT Mobiles">
-  <h2 id="loginTitle">myT Mobiles Signage</h2>
-  <p id="setupHint" class="muted" hidden>Welcome! Choose a password for the admin. You will use it every time you sign in.</p>
-  <form class="row" onsubmit="login(event)">
-    <input id="pw" type="password" placeholder="Admin password" class="grow" autofocus>
-    <button class="primary" id="loginBtn">Sign in</button>
+  <div class="wordmark" style="font-size:28px;margin-bottom:6px">OpenSign</div>
+  <h2 id="loginTitle">Sign in</h2>
+  <p id="setupHint" class="muted" hidden>Welcome! Create the platform administrator for this server. From here you will create stores and give each store owner a login.</p>
+  <form onsubmit="login(event)">
+    <input id="lg" placeholder="Email or login name" autocomplete="username" style="width:100%" autofocus>
+    <div class="row" style="margin-top:8px"><input id="pw" type="password" placeholder="Password" autocomplete="current-password" class="grow">
+    <button class="primary" id="loginBtn">Sign in</button></div>
   </form>
-  <small id="loginErr"></small>
+  <small id="loginErr" style="display:block;margin-top:8px"></small>
+  <small id="forgot" style="display:block;margin-top:8px">Forgot your password? Ask your store owner. Store owners ask the platform administrator.</small>
 </div>
 <div id="app" hidden>
   <header>
-    <div class="brand"><img class="logo" src="/brand/myt-logo.png" alt="myT Mobiles"><span class="product">Signage</span></div>
-    <nav>
-      <button data-tab="products">Products</button>
-      <button data-tab="posters">Posters</button>
-      <button data-tab="devices">Screens</button>
-      <button data-tab="media">Media</button>
-      <button data-tab="playlists">Playlists</button>
-      <button data-tab="layouts">Layouts</button>
-      <button data-tab="walls">Video walls</button>
-      <button data-tab="alerts">Alerts</button>
-      <button data-tab="reports">Reports</button>
-    </nav>
+    <div class="brand" id="brand"></div>
+    <nav id="nav"></nav>
+    <span class="who" id="who"></span>
     <button onclick="logout()">Sign out</button>
   </header>
   <main id="view"></main>
   <footer>POWERED BY OPENSIGN</footer>
 </div>
+<script src="/admin.js"></script>
 <script src="/products.js"></script>
 <script src="/poster-render.js"></script>
 <script src="/posters.js"></script>
 <script>
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-const TABS = ['products', 'posters', 'devices', 'media', 'playlists', 'layouts', 'walls', 'alerts', 'reports'];
+const TAB_LABELS = { platform: 'Platform', products: 'Products', posters: 'Posters', devices: 'Screens', media: 'Media', playlists: 'Playlists', layouts: 'Layouts', walls: 'Video walls', alerts: 'Alerts', reports: 'Reports', team: 'Team', settings: 'Settings' };
+let ME = null, ORG = null; // who is signed in, and their store (null for a platform administrator with no store)
 let token = localStorage.getItem('token'), tab = localStorage.getItem('tab');
-if (!TABS.includes(tab)) tab = 'products'; // a stale or unknown saved tab must not blank the page
-let devices = [], media = [], playlists = [], walls = [], layouts = [], alertNow = null, report = null, reportDays = 7, editing = null, timer;
+/** Tabs this person may use: the store's tabs by role and feature, plus Platform for platform administrators. */
+function availableTabs() {
+  const t = [];
+  if (ME.user.platform && !ME.org) t.push('platform');
+  if (ME.org) {
+    if (ME.org.features.catalog) t.push('products', 'posters');
+    t.push('devices', 'media', 'playlists', 'layouts', 'walls', 'alerts', 'reports');
+    if (ME.user.role === 'owner') t.push('team');
+    t.push('settings');
+  }
+  if (ME.user.platform && ME.org) t.push('platform');
+  return t;
+}
+let devices = [], media = [],  playlists = [], walls = [], layouts = [], alertNow = null, report = null, reportDays = 7, editing = null, timer;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
@@ -100,35 +108,58 @@ async function api(path, opts = {}) {
 let setupRequired = false;
 async function showLogin() {
   try { setupRequired = (await (await fetch('/api/auth/status')).json()).setupRequired; } catch {}
-  $('#loginTitle').textContent = setupRequired ? 'Welcome to myT Mobiles Signage' : 'myT Mobiles Signage';
+  document.title = 'OpenSign';
+  $('#loginTitle').textContent = setupRequired ? 'Set up OpenSign' : 'Sign in';
   $('#setupHint').hidden = !setupRequired;
-  $('#loginBtn').textContent = setupRequired ? 'Create password' : 'Sign in';
-  $('#pw').placeholder = setupRequired ? 'Choose a password (6+ characters)' : 'Admin password';
+  $('#forgot').style.display = setupRequired ? 'none' : 'block'; // (the hidden attribute loses to display:block)
+  $('#loginBtn').textContent = setupRequired ? 'Create administrator' : 'Sign in';
+  $('#pw').placeholder = setupRequired ? 'Choose a password (8+ characters)' : 'Password';
   $('#login').hidden = false;
 }
 async function login(e) {
   e.preventDefault();
-  const r = await fetch(setupRequired ? '/api/auth/setup' : '/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: $('#pw').value }) });
-  if (!r.ok) { $('#loginErr').textContent = (await r.json()).error || 'Wrong password'; return; }
-  token = (await r.json()).token; localStorage.setItem('token', token); start();
+  const r = await fetch(setupRequired ? '/api/auth/setup' : '/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ login: $('#lg').value, password: $('#pw').value }) });
+  if (!r.ok) { $('#loginErr').textContent = (await r.json()).error || 'Wrong login or password'; return; }
+  token = (await r.json()).token; localStorage.setItem('token', token); $('#pw').value = ''; $('#loginErr').textContent = ''; start();
 }
-function logout() { localStorage.removeItem('token'); token = null; clearInterval(timer); $('#app').hidden = true; showLogin(); }
+function logout() {
+  if (token) fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + token } }).catch(() => {});
+  localStorage.removeItem('token'); token = null; ME = ORG = null; clearInterval(timer); $('#app').hidden = true; showLogin();
+}
+/** Store logo, name and accent colour. A store's branding is shown only to that store's people. */
+function applyBranding() {
+  ORG = ME.org;
+  document.documentElement.style.setProperty('--accent', ORG?.accent || '#4f8cff');
+  document.title = ORG ? `${ORG.name} Signage` : 'OpenSign';
+  $('#brand').innerHTML = (ORG?.logoUrl ? `<img class="logo" src="${esc(ORG.logoUrl)}" alt="${esc(ORG.name)}">` : `<span class="wordmark">${esc(ORG?.name || 'OpenSign')}</span>`) + '<span class="product">Signage</span>';
+  $('#who').textContent = ME.user.name + (ME.user.platform ? ' · platform admin' : '');
+  if (ORG?.logoUrl) $('#favicon').href = ORG.logoUrl;
+}
+function buildNav() {
+  $('#nav').innerHTML = availableTabs().map((t) => `<button data-tab="${t}">${TAB_LABELS[t]}</button>`).join('');
+  document.querySelectorAll('#nav button').forEach((b) => b.onclick = () => { tab = b.dataset.tab; editing = null; localStorage.setItem('tab', tab); load(); });
+}
 async function load() {
-  [devices, media, playlists, walls, alertNow, layouts] = await Promise.all([api('/devices'), api('/media'), api('/playlists'), api('/walls'), api('/alert'), api('/layouts')]);
+  if (ME.org) [devices, media, playlists, walls, alertNow, layouts] = await Promise.all([api('/devices'), api('/media'), api('/playlists'), api('/walls'), api('/alert'), api('/layouts')]);
+  if (tab === 'platform') await loadPlatform();
+  if (tab === 'team') await loadTeam();
   if (tab === 'reports') report = await api('/reports/plays?days=' + reportDays);
   if (tab === 'products') await loadProducts();
   if (tab === 'posters') await loadPosters();
   render();
 }
-function start() {
+async function start() {
+  try { ME = await api('/me'); } catch { return; }
+  applyBranding();
+  if (!availableTabs().includes(tab)) tab = availableTabs()[0]; // a stale or unknown saved tab must not blank the page
   $('#login').hidden = true; $('#app').hidden = false;
-  document.querySelectorAll('nav button').forEach((b) => b.onclick = () => { tab = b.dataset.tab; editing = null; localStorage.setItem('tab', tab); render(); });
+  buildNav();
   load(); clearInterval(timer);
   timer = setInterval(() => { if ((tab === 'devices' || tab === 'reports') && !document.activeElement.closest('#view')) load(); }, 15000);
 }
 function render() {
-  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  $('#view').innerHTML = { products: renderProducts, posters: renderPosters, devices: renderDevices, media: renderMedia, playlists: renderPlaylists, walls: renderWalls, layouts: renderLayouts, alerts: renderAlerts, reports: renderReports }[tab]();
+  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  $('#view').innerHTML = { platform: renderPlatform, team: renderTeam, settings: renderSettings, products: renderProducts, posters: renderPosters, devices: renderDevices, media: renderMedia, playlists: renderPlaylists, walls: renderWalls, layouts: renderLayouts, alerts: renderAlerts, reports: renderReports }[tab]();
   if (typeof afterRender === 'function') afterRender(); // tabs that draw on a canvas do it here
 }
 const plOptions = (sel) => '<option value="">— none —</option>' + playlists.map((p) => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
@@ -141,7 +172,7 @@ function renderDevices() {
     <input id="claimCode" placeholder="6-digit code shown on the TV" maxlength="6">
     <input id="claimName" placeholder="Screen name (e.g. Lobby)" class="grow">
     <button class="primary" onclick="claim()">Add</button></div></div>` +
-    (devices.length ? '' : '<p class="muted">No screens yet. Open the OpenSign Player app on your TV. It will appear here by itself.</p>') +
+    (devices.length ? '' : '<p class="muted">No screens yet. Open the OpenSign Player app on your TV, then type the 6-digit code it shows into the box above.</p>') +
     devices.map((d) => {
       if (!d.paired) return `<div class="card row"><span class="grow"><span class="dot"></span>Waiting to pair: <b>${d.pairingCode}</b> <small>${esc(d.model)}</small></span><button class="primary" onclick="quickClaim('${d.pairingCode}')">Add this screen</button><button class="danger" onclick="delDevice('${d.id}')">Remove</button></div>`;
       const online = d.lastSeen && now - d.lastSeen < 150000;

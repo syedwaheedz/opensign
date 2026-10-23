@@ -4,7 +4,7 @@ OpenSign: open-source digital signage (MagicINFO alternative). `server/` is a No
 
 # Commands
 ```bash
-cd server && npm install && npm start          # http://localhost:3000 (env: PORT, DATA_DIR, ADMIN_PASSWORD, PUBLIC_URL)
+cd server && npm install && npm start          # http://localhost:3000 (env: PORT, DATA_DIR, PUBLIC_URL; see docs/PLATFORM.md)
 PORT=3055 DATA_DIR=$TMPDIR/os node server/index.js   # throwaway instance for manual/API checks
 node --check server/index.js                    # server syntax check (also run by CI)
 cd server && npm test                           # server tests (node:test, no extra deps; also run by CI)
@@ -19,11 +19,12 @@ There is no linter or formatter. Android has no tests. Server tests live in `ser
 - Server is one file (`server/index.js`) with a JSON store (`DATA_DIR/db.json`, atomic write). Proof-of-play goes to append-only `plays.ndjson`.
 - Players cache the whole config and resolve schedules/walls locally; the server only sends `buildConfig()` output plus `serverTime`.
 - Instant push: players long-poll `/api/player/:id/wait`. Any change affecting a config must call `bumpAll()` or `notifyDevice()`.
-- Player endpoints are unauthenticated (`deviceId` is the credential); admin endpoints use in-memory bearer tokens.
+- One server, many stores. Every tenant record has `orgId`; accounts, sessions, roles and the platform admin live in `server/auth.js`; `server/migrate.js` upgrades single-store data once. Roles: platform admin (no store data access), owner, staff. Features are switched per store (`org.features`).
+- Player endpoints are unauthenticated (`deviceId` is the credential) and keep a fixed shape: installed TVs cannot be updated. Admin endpoints need a bearer token from `auth.js`.
 - YouTube/Instagram/Facebook links and widgets (text/ticker/clock) are server-rendered pages at `/embed/:id`, loaded in the player's WebView.
 - Video wall: an enabled wall overrides member screens' playlist/schedule; screens sync via the server clock (`clockOffset`), not a handshake.
 - Player logic lives in `MainActivity` as coroutine loops (sync, heartbeat, alert, playback). Last config is cached in `Prefs` for offline start.
-- Admin UI is `server/public/index.html` plus tab scripts (`products.js`): no build step, re-rendering API data into `innerHTML`.
+- Admin UI is `server/public/index.html` plus tab scripts (`admin.js`, `products.js`, `posters.js`, `poster-render.js`): no build step, re-rendering API data into `innerHTML`.
 - Posters are drawn in the admin page (`public/poster-render.js`, canvas); the server only stores designs, enforces approval (`poster-routes.js`) and keeps the rendered image in the normal media library. A published poster whose content hash changed is removed from playlists (`retireStale`).
 - Catalog rules live in `server/catalog.js` (verification, offers, warnings, `posterData`). Posters must read product data only through `posterData`, never raw products. `server/importer.js` only fetches/parses; `catalog-routes.js` saves.
 
@@ -49,7 +50,10 @@ There is no linter or formatter. Android has no tests. Server tests live in `ser
 # Do not
 - IMPORTANT: never read, print, regenerate or change the signing key or secrets (`~/.opensign-signing/`, `KEYSTORE_*`, `KEY_*` repo secrets).
 - Do not paste `${{ github.event.* }}` (PR titles, branch names) into workflow `run:` scripts. Pass them through `env:`.
-- Do not add a default or hard-coded admin password; first-run setup chooses it.
+- Do not add a default or hard-coded password; first-run setup chooses the platform admin.
+- Every tenant route in `index.js`, `catalog-routes.js` and `poster-routes.js` must read and write only records with `orgId === req.orgId`: use `mine()` / `own()`, set `orgId` on create, and validate that referenced ids (playlist, media, device, product) belong to the same store. Add each new tenant resource to `server/test/tenancy.test.js`.
+- Do not name an uploaded file's extension from the client's file name, and do not accept SVG or HTML uploads (uploads are served from the admin's own origin).
+- Do not put a store's name, logo, colour or import address in code. They are store data (`org`).
 - Do not show a price, stock or offer on a poster except from `posterData()`. Do not subtract offers from selling prices.
 - Do not rename or change the `setupRequired` field of `/api/auth/status` or the UDP discovery protocol (see Gotchas).
 
@@ -59,6 +63,6 @@ There is no linter or formatter. Android has no tests. Server tests live in `ser
 - Admin scripts share one global scope: a duplicate top-level `const`/`let` name across `index.html`, `products.js`, `posters.js`, `poster-render.js` silently breaks a script. Use unique names.
 - No Gradle wrapper jar is committed; CI uses Gradle 8.7 via `gradle/actions/setup-gradle`.
 - `versionCode` comes from `BUILD_NUMBER` (CI run number); local builds get 1. Release tags are `v0.1.<run number>`.
-- `ADMIN_PASSWORD` env overrides the stored password. Admin tokens are in memory, so a server restart signs everyone out.
+- Sessions are in memory, so a server restart signs everyone out. `PLATFORM_ADMIN_LOGIN`/`PLATFORM_ADMIN_PASSWORD` env recreate or reset a platform admin (recovery).
 - Cleartext HTTP is intentional (LAN servers); the manifest sets `usesCleartextTraffic`.
 - Android 10+ may block auto-start on boot unless "Display over other apps" is granted.
