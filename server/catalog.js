@@ -48,7 +48,7 @@ export function cleanVariants(list) {
     storage: str(v?.storage, 20),
     colour: str(v?.colour ?? v?.color, 40),
     officialPrice: price(v?.officialPrice), // brand MRP / official launch price
-    sellingPrice: price(v?.sellingPrice), // myT Mobiles selling price
+    sellingPrice: price(v?.sellingPrice), // the store's selling price
     stock: Number.isFinite(Number(v?.stock)) ? Math.max(0, Math.round(Number(v.stock))) : null,
   }));
 }
@@ -118,7 +118,7 @@ export function warnings(p, now = today()) {
   const add = (level, code, message) => w.push({ level, code, message });
   if (!p.images.length) add('error', 'no_image', 'No product image. Upload an approved image.');
   if (!p.variants.length) add('warn', 'no_variant', 'No storage/RAM variant is listed.');
-  else if (!p.variants.some((v) => v.sellingPrice)) add('warn', 'no_selling_price', 'No myT Mobiles selling price is set.');
+  else if (!p.variants.some((v) => v.sellingPrice)) add('warn', 'no_selling_price', 'No selling price is set.');
   if (p.variants.length && !p.variants.some((v) => v.officialPrice)) add('warn', 'no_official_price', 'No official price (MRP) is set.');
   if (!p.sourceUrl) add('warn', 'no_source', 'No source URL is recorded.');
   if (!p.highlights.length && !p.specs.length) add('warn', 'no_specs', 'No key specifications are listed.');

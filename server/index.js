@@ -8,10 +8,11 @@ import os from 'node:os';
 import { registerCatalogRoutes } from './catalog-routes.js';
 import { registerPosterRoutes } from './poster-routes.js';
 import { fileURLToPath } from 'node:url';
+import { registerAuth, hashPassword } from './auth.js';
+import { migrate } from './migrate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; // optional; otherwise the first visitor sets a password
 const PUBLIC_URL = process.env.PUBLIC_URL; // optional, e.g. http://192.168.1.10:3000
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const MEDIA_DIR = path.join(DATA_DIR, 'media');
@@ -20,15 +21,36 @@ const PLAYS_FILE = path.join(DATA_DIR, 'plays.ndjson'); // append-only proof-of-
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 // ---- tiny JSON store -------------------------------------------------------
-let db = { devices: [], media: [], playlists: [], walls: [], layouts: [], products: [], posters: [], admin: null, alert: null };
+let db = { devices: [], media: [], playlists: [], walls: [], layouts: [], products: [], posters: [], orgs: [], users: [], alerts: {} };
 if (fs.existsSync(DB_FILE)) db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) };
 function save() {
   const tmp = DB_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
   fs.renameSync(tmp, DB_FILE);
 }
+const MAX_WAITING = Number(process.env.MAX_WAITING_SCREENS) || 2000;
 const uid = () => crypto.randomUUID();
-const pairingCode = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+const newPairingCode = () => { // unique among the screens that are waiting, so a code always names one screen
+  for (;;) {
+    const c = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+    if (!db.devices.some((d) => !d.paired && d.pairingCode === c)) return c;
+  }
+};
+if (migrate(db, { MEDIA_DIR, hashPassword })) save(); // single-store data becomes one store (once)
+
+const SAFE_EXT = {
+  'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp', 'image/bmp': '.bmp',
+  'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov', 'video/x-matroska': '.mkv',
+};
+// Stores hold their own files. Nothing outside a signed-in store can list them; file names are random.
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: MEDIA_DIR,
+    // The extension comes from the declared type through a fixed list, never from the uploaded file name.
+    filename: (_req, file, cb) => cb(null, uid() + (SAFE_EXT[file.mimetype] || '.bin')),
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 * 1024 },
+});
 
 // ---- instant push: players hold a request open and we answer the moment their config changes ----
 const waiters = new Map(); // deviceId -> Set<res>
@@ -40,41 +62,32 @@ function notify(deviceIds) {
 }
 const notifyDevice = (d) => notify([d.deviceId]);
 
+// Screens that registered but were never claimed disappear after a week (a TV that is still on simply registers again).
+setInterval(() => {
+  const before = db.devices.length;
+  db.devices = db.devices.filter((d) => d.paired || (d.lastSeen || d.createdAt) > Date.now() - 7 * 86400000);
+  if (db.devices.length !== before) save();
+}, 3600e3).unref();
+if (process.env.ADMIN_PASSWORD) console.warn('Note: ADMIN_PASSWORD is no longer used. Sign in with a login name. To recover access set PLATFORM_ADMIN_LOGIN and PLATFORM_ADMIN_PASSWORD.');
+
 // ---- app -------------------------------------------------------------------
 const app = express();
 app.use(express.json({ limit: '1mb' }));
-app.use('/media', express.static(MEDIA_DIR, { maxAge: '30d', immutable: true }));
-app.use(express.static(path.join(__dirname, 'public')));
-
-const tokens = new Set();
-const hashPw = (pw, salt) => crypto.scryptSync(pw, salt, 32).toString('hex');
-const setupRequired = () => !ADMIN_PASSWORD && !db.admin;
-const newToken = () => { const t = crypto.randomBytes(24).toString('hex'); tokens.add(t); return t; };
-
-app.get('/api/auth/status', (_req, res) => res.json({ setupRequired: setupRequired() }));
-// First run: whoever opens the admin first chooses the password (no default password to forget to change).
-app.post('/api/auth/setup', (req, res) => {
-  const pw = String(req.body?.password || '');
-  if (!setupRequired()) return res.status(403).json({ error: 'Already set up' });
-  if (pw.length < 6) return res.status(400).json({ error: 'Use at least 6 characters' });
-  const salt = crypto.randomBytes(16).toString('hex');
-  db.admin = { salt, hash: hashPw(pw, salt) };
-  save();
-  res.json({ token: newToken() });
-});
-app.post('/api/auth/login', (req, res) => {
-  const pw = String(req.body?.password || '');
-  const ok = ADMIN_PASSWORD
-    ? pw === ADMIN_PASSWORD
-    : db.admin && crypto.timingSafeEqual(Buffer.from(hashPw(pw, db.admin.salt), 'hex'), Buffer.from(db.admin.hash, 'hex'));
-  if (!ok) return res.status(401).json({ error: 'Wrong password' });
-  res.json({ token: newToken() });
-});
-const requireAdmin = (req, res, next) => {
-  const token = (req.headers.authorization || '').replace(/^Bearer /, '');
-  if (!tokens.has(token)) return res.status(401).json({ error: 'Unauthorized' });
+// Behind a reverse proxy (HTTPS), set TRUST_PROXY=1 so the login rate limit sees each visitor's own address.
+if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY) || true);
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  if (!req.path.startsWith('/embed/')) res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   next();
-};
+});
+// Uploaded files are served from the same address as the admin. They must never run as a page: the file extension
+// is chosen by us from a short list (see SAFE_EXT), and the sandbox policy blocks scripts even if one slips through.
+app.use('/media', express.static(MEDIA_DIR, {
+  maxAge: '30d', immutable: true,
+  setHeaders: (res) => res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'"),
+}));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ---- links: YouTube / Instagram / Facebook / direct images & videos / any web page ----
 function classifyLink(raw) {
@@ -153,10 +166,12 @@ app.post('/api/player/register', (req, res) => {
   if (!deviceId || typeof deviceId !== 'string') return res.status(400).json({ error: 'deviceId required' });
   let d = db.devices.find((x) => x.deviceId === deviceId);
   if (!d) {
+    // Registration is open to every TV, so the list of waiting screens is capped and old entries are swept away.
+    if (db.devices.filter((x) => !x.paired).length >= MAX_WAITING) return res.status(429).json({ error: 'Too many screens are waiting. Try again later.' });
     d = {
-      id: uid(), deviceId, name: null, model: model || '', paired: false,
-      pairingCode: pairingCode(), defaultPlaylistId: null, schedule: [], rev: 0,
-      lastSeen: null, nowPlaying: null, createdAt: Date.now(),
+      id: uid(), deviceId, orgId: null, name: null, model: model || '', paired: false,
+      pairingCode: newPairingCode(), defaultPlaylistId: null, schedule: [], rev: 0,
+      lastSeen: Date.now(), nowPlaying: null, createdAt: Date.now(),
     };
     db.devices.push(d);
     save();
@@ -168,7 +183,7 @@ app.post('/api/player/register', (req, res) => {
 // each showing its own tile (col,row) of a cols x rows canvas.
 function wallFor(d) {
   for (const w of db.walls) {
-    if (!w.enabled || !w.playlistId) continue;
+    if (w.orgId !== d.orgId || !w.enabled || !w.playlistId) continue;
     const m = w.members.find((x) => x.deviceId === d.id);
     if (m) return { id: w.id, cols: w.cols, rows: w.rows, col: m.col, row: m.row, playlistId: w.playlistId };
   }
@@ -176,7 +191,7 @@ function wallFor(d) {
 }
 
 function alertFor(d) {
-  const a = db.alert;
+  const a = db.alerts[d.orgId];
   if (!a || a.until <= Date.now()) return null;
   if (a.deviceIds.length && !a.deviceIds.includes(d.id)) return null;
   return { message: a.message, color: a.color, until: a.until };
@@ -188,19 +203,19 @@ function buildConfig(req, d) {
   // A screen's default/slot id may point to a layout; its zones pull in their own playlists.
   const layouts = {};
   for (const id of [...playlistIds]) {
-    const l = db.layouts.find((x) => x.id === id);
+    const l = db.layouts.find((x) => x.id === id && x.orgId === d.orgId);
     if (!l) continue;
     layouts[id] = { id, name: l.name, zones: l.zones.map(({ x, y, w, h, playlistId }) => ({ x, y, w, h, playlistId })) };
     for (const z of l.zones) if (z.playlistId) playlistIds.add(z.playlistId);
   }
   const playlists = {};
   for (const pid of playlistIds) {
-    const p = db.playlists.find((x) => x.id === pid);
+    const p = db.playlists.find((x) => x.id === pid && x.orgId === d.orgId);
     if (!p) continue;
     playlists[pid] = {
       id: p.id, name: p.name,
       items: p.items.flatMap((it) => {
-        const m = db.media.find((x) => x.id === it.mediaId);
+        const m = db.media.find((x) => x.id === it.mediaId && x.orgId === d.orgId);
         if (!m) return [];
         return [{
           id: m.id, name: m.name, type: m.type, duration: it.duration || 10, size: m.size || 0,
@@ -248,30 +263,48 @@ app.post('/api/player/:deviceId/heartbeat', (req, res) => {
   const plays = Array.isArray(req.body?.plays) ? req.body.plays.slice(0, 500) : [];
   const lines = plays
     .filter((p) => typeof p?.itemId === 'string' && Number.isFinite(p.start) && Number.isFinite(p.ms))
-    .map((p) => JSON.stringify({ d: d.id, i: p.itemId, n: String(p.name || '').slice(0, 200), t: Math.round(p.start), ms: Math.round(p.ms) }));
-  if (lines.length) fs.appendFileSync(PLAYS_FILE, lines.join('\n') + '\n');
+    .map((p) => JSON.stringify({ o: d.orgId, d: d.id, i: p.itemId, n: String(p.name || '').slice(0, 200), t: Math.round(p.start), ms: Math.round(p.ms) }));
+  if (lines.length && d.orgId) fs.appendFileSync(PLAYS_FILE, lines.join('\n') + '\n');
   save();
   res.json({ ok: true });
 });
 
-// ---- admin API -------------------------------------------------------------
+// ---- admin API: everything below belongs to the signed-in user's store ------------------------------------
+// Rule for every route here: read and write only records whose orgId equals req.orgId.
+// A record of another store looks exactly like a missing one (404), so ids cannot be probed.
+const auth = registerAuth({ app, db, save, uid, MEDIA_DIR, upload, onOrgRemoved: removeOrgData });
 const api = express.Router();
-api.use(requireAdmin);
+api.use(auth.requireAuth, auth.requireOrg);
 
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: MEDIA_DIR,
-    filename: (_req, file, cb) => cb(null, uid() + path.extname(file.originalname).toLowerCase()),
-  }),
-  limits: { fileSize: 4 * 1024 * 1024 * 1024 },
-});
+const mine = (list, req) => list.filter((x) => x.orgId === req.orgId);
+const own = (list, req, id) => list.find((x) => x.id === id && x.orgId === req.orgId);
+const notFound = (res) => res.status(404).json({ error: 'not found' });
+const orgDevices = (orgId) => db.devices.filter((d) => d.orgId === orgId);
 
-api.get('/media', (_req, res) => res.json(db.media));
+/** Tell every screen of one store to re-read its config (and wake any that are waiting). */
+function bumpOrg(orgId) {
+  const ds = orgDevices(orgId);
+  for (const d of ds) d.rev++;
+  save();
+  notify(ds.map((d) => d.deviceId));
+}
+
+/** Remove everything a store owns, including its files. Used when the platform administrator deletes a store. */
+function removeOrgData(orgId) {
+  const drop = (f) => f && fs.rmSync(path.join(MEDIA_DIR, f), { force: true });
+  for (const m of db.media) if (m.orgId === orgId) drop(m.file);
+  for (const p of db.products) if (p.orgId === orgId) for (const i of p.images) drop(i.file);
+  const keep = (x) => x.orgId !== orgId;
+  for (const k of ['devices', 'media', 'playlists', 'walls', 'layouts', 'products', 'posters']) db[k] = db[k].filter(keep);
+  delete db.alerts[orgId];
+}
+
+api.get('/media', (req, res) => res.json(mine(db.media, req)));
 api.post('/media', upload.array('files'), (req, res) => {
   const added = (req.files || []).flatMap((f) => {
     const type = f.mimetype.startsWith('video/') ? 'video' : f.mimetype.startsWith('image/') ? 'image' : null;
-    if (!type) { fs.unlinkSync(f.path); return []; }
-    const m = { id: uid(), name: f.originalname, type, file: f.filename, size: f.size, createdAt: Date.now() };
+    if (!type || !SAFE_EXT[f.mimetype]) { fs.unlinkSync(f.path); return []; } // only the listed image and video types (SVG can carry scripts)
+    const m = { id: uid(), orgId: req.orgId, name: f.originalname, type, file: f.filename, size: f.size, createdAt: Date.now() };
     db.media.push(m);
     return [m];
   });
@@ -282,7 +315,7 @@ const addLink = (req, res) => {
   const { name, url } = req.body || {};
   const c = classifyLink((url || '').trim());
   if (!c) return res.status(400).json({ error: 'Paste a full link starting with http:// or https://' });
-  const m = { id: uid(), name: name || url, url: url.trim(), size: 0, createdAt: Date.now(), ...c };
+  const m = { id: uid(), orgId: req.orgId, name: name || url, url: url.trim(), size: 0, createdAt: Date.now(), ...c };
   db.media.push(m);
   save();
   res.json(m);
@@ -290,138 +323,155 @@ const addLink = (req, res) => {
 api.post('/media/link', addLink);
 api.post('/media/web', addLink);
 api.delete('/media/:id', (req, res) => {
-  const m = db.media.find((x) => x.id === req.params.id);
-  if (!m) return res.status(404).json({ error: 'not found' });
+  const m = own(db.media, req, req.params.id);
+  if (!m) return notFound(res);
   if (m.file) fs.rmSync(path.join(MEDIA_DIR, m.file), { force: true });
   db.media = db.media.filter((x) => x !== m);
-  for (const p of db.playlists) p.items = p.items.filter((i) => i.mediaId !== m.id);
-  bumpAll();
+  for (const p of mine(db.playlists, req)) p.items = p.items.filter((i) => i.mediaId !== m.id);
+  bumpOrg(req.orgId);
   res.json({ ok: true });
 });
 
-api.get('/playlists', (_req, res) => res.json(db.playlists));
+api.get('/playlists', (req, res) => res.json(mine(db.playlists, req)));
 api.post('/playlists', (req, res) => {
-  const p = { id: uid(), name: req.body?.name || 'New playlist', items: [] };
+  const p = { id: uid(), orgId: req.orgId, name: String(req.body?.name || 'New playlist').slice(0, 120), items: [] };
   db.playlists.push(p);
   save();
   res.json(p);
 });
 api.put('/playlists/:id', (req, res) => {
-  const p = db.playlists.find((x) => x.id === req.params.id);
-  if (!p) return res.status(404).json({ error: 'not found' });
-  if (typeof req.body.name === 'string') p.name = req.body.name;
+  const p = own(db.playlists, req, req.params.id);
+  if (!p) return notFound(res);
+  if (typeof req.body.name === 'string') p.name = req.body.name.slice(0, 120);
   if (Array.isArray(req.body.items)) {
-    p.items = req.body.items.map((i) => ({ mediaId: String(i.mediaId), duration: Math.max(1, Number(i.duration) || 10) }));
+    const ownMedia = new Set(mine(db.media, req).map((m) => m.id));
+    p.items = req.body.items
+      .filter((i) => ownMedia.has(String(i.mediaId))) // media of another store is ignored
+      .map((i) => ({ mediaId: String(i.mediaId), duration: Math.max(1, Number(i.duration) || 10) }));
   }
-  bumpAll();
+  bumpOrg(req.orgId);
   res.json(p);
 });
 api.delete('/playlists/:id', (req, res) => {
-  db.playlists = db.playlists.filter((x) => x.id !== req.params.id);
-  for (const w of db.walls) if (w.playlistId === req.params.id) { w.playlistId = null; w.enabled = false; }
-  for (const l of db.layouts) for (const z of l.zones) if (z.playlistId === req.params.id) z.playlistId = null;
-  for (const d of db.devices) {
-    if (d.defaultPlaylistId === req.params.id) d.defaultPlaylistId = null;
-    d.schedule = d.schedule.filter((s) => s.playlistId !== req.params.id);
+  const p = own(db.playlists, req, req.params.id);
+  if (!p) return notFound(res);
+  db.playlists = db.playlists.filter((x) => x !== p);
+  for (const w of mine(db.walls, req)) if (w.playlistId === p.id) { w.playlistId = null; w.enabled = false; }
+  for (const l of mine(db.layouts, req)) for (const z of l.zones) if (z.playlistId === p.id) z.playlistId = null;
+  for (const d of orgDevices(req.orgId)) {
+    if (d.defaultPlaylistId === p.id) d.defaultPlaylistId = null;
+    d.schedule = d.schedule.filter((s) => s.playlistId !== p.id);
   }
-  bumpAll();
+  bumpOrg(req.orgId);
   res.json({ ok: true });
 });
 
-api.get('/walls', (_req, res) => res.json(db.walls));
+api.get('/walls', (req, res) => res.json(mine(db.walls, req)));
 api.post('/walls', (req, res) => {
-  const w = { id: uid(), name: req.body?.name || 'Video wall', enabled: false, cols: 2, rows: 1, playlistId: null, members: [] };
+  const w = { id: uid(), orgId: req.orgId, name: String(req.body?.name || 'Video wall').slice(0, 80), enabled: false, cols: 2, rows: 1, playlistId: null, members: [] };
   db.walls.push(w);
   save();
   res.json(w);
 });
 api.put('/walls/:id', (req, res) => {
-  const w = db.walls.find((x) => x.id === req.params.id);
-  if (!w) return res.status(404).json({ error: 'not found' });
+  const w = own(db.walls, req, req.params.id);
+  if (!w) return notFound(res);
   const b = req.body || {};
-  if (typeof b.name === 'string') w.name = b.name;
+  if (typeof b.name === 'string') w.name = b.name.slice(0, 80);
   if (typeof b.enabled === 'boolean') w.enabled = b.enabled;
   if (b.cols !== undefined) w.cols = Math.min(8, Math.max(1, Number(b.cols) || 1));
   if (b.rows !== undefined) w.rows = Math.min(8, Math.max(1, Number(b.rows) || 1));
-  if (b.playlistId !== undefined) w.playlistId = b.playlistId || null;
+  if (b.playlistId !== undefined) w.playlistId = b.playlistId && own(db.playlists, req, b.playlistId) ? b.playlistId : null;
   if (Array.isArray(b.members)) {
     const seen = new Set();
-    w.members = b.members.filter((m) => db.devices.some((d) => d.id === m.deviceId) && !seen.has(m.deviceId) && seen.add(m.deviceId));
+    w.members = b.members.filter((m) => own(db.devices, req, m.deviceId) && !seen.has(m.deviceId) && seen.add(m.deviceId));
     w.members = w.members.map((m) => ({ deviceId: m.deviceId, col: Number(m.col) || 0, row: Number(m.row) || 0 }));
     // a screen can belong to only one wall
-    for (const o of db.walls) if (o !== w) o.members = o.members.filter((m) => !seen.has(m.deviceId));
+    for (const o of mine(db.walls, req)) if (o !== w) o.members = o.members.filter((m) => !seen.has(m.deviceId));
   }
   w.members = w.members.filter((m) => m.col < w.cols && m.row < w.rows);
-  bumpAll();
+  bumpOrg(req.orgId);
   res.json(w);
 });
 api.delete('/walls/:id', (req, res) => {
-  db.walls = db.walls.filter((x) => x.id !== req.params.id);
-  bumpAll();
+  const w = own(db.walls, req, req.params.id);
+  if (!w) return notFound(res);
+  db.walls = db.walls.filter((x) => x !== w);
+  bumpOrg(req.orgId);
   res.json({ ok: true });
 });
 
 // ---- layouts: split the screen into zones, each playing its own playlist ----
 const pct = (v, lo, hi, d) => Math.min(hi, Math.max(lo, Number.isFinite(Number(v)) ? Math.round(Number(v) * 10) / 10 : d));
-function cleanZones(zones) {
+function cleanZones(zones, req) {
   return (Array.isArray(zones) ? zones : []).slice(0, 8).map((z, i) => {
     const x = pct(z.x, 0, 95, 0), y = pct(z.y, 0, 95, 0);
     return {
       id: String(z.id || uid()), name: String(z.name || `Zone ${i + 1}`).slice(0, 40), x, y,
       w: pct(z.w, 5, 100 - x, 100 - x), h: pct(z.h, 5, 100 - y, 100 - y),
-      playlistId: z.playlistId && db.playlists.some((p) => p.id === z.playlistId) ? z.playlistId : null,
+      playlistId: z.playlistId && own(db.playlists, req, z.playlistId) ? z.playlistId : null,
     };
   });
 }
-api.get('/layouts', (_req, res) => res.json(db.layouts));
+api.get('/layouts', (req, res) => res.json(mine(db.layouts, req)));
 api.post('/layouts', (req, res) => {
-  const zones = cleanZones(req.body?.zones?.length ? req.body.zones : [{ name: 'Main', x: 0, y: 0, w: 100, h: 100 }]);
-  const l = { id: uid(), name: String(req.body?.name || 'New layout').slice(0, 60), zones };
+  const zones = cleanZones(req.body?.zones?.length ? req.body.zones : [{ name: 'Main', x: 0, y: 0, w: 100, h: 100 }], req);
+  const l = { id: uid(), orgId: req.orgId, name: String(req.body?.name || 'New layout').slice(0, 60), zones };
   db.layouts.push(l);
   save();
   res.json(l);
 });
 api.put('/layouts/:id', (req, res) => {
-  const l = db.layouts.find((x) => x.id === req.params.id);
-  if (!l) return res.status(404).json({ error: 'not found' });
+  const l = own(db.layouts, req, req.params.id);
+  if (!l) return notFound(res);
   if (typeof req.body.name === 'string') l.name = req.body.name.slice(0, 60);
   if (Array.isArray(req.body.zones)) {
     if (!req.body.zones.length) return res.status(400).json({ error: 'A layout needs at least one zone' });
-    l.zones = cleanZones(req.body.zones);
+    l.zones = cleanZones(req.body.zones, req);
   }
-  bumpAll();
+  bumpOrg(req.orgId);
   res.json(l);
 });
 api.delete('/layouts/:id', (req, res) => {
-  db.layouts = db.layouts.filter((x) => x.id !== req.params.id);
-  for (const d of db.devices) {
-    if (d.defaultPlaylistId === req.params.id) d.defaultPlaylistId = null;
-    d.schedule = d.schedule.filter((s) => s.playlistId !== req.params.id);
+  const l = own(db.layouts, req, req.params.id);
+  if (!l) return notFound(res);
+  db.layouts = db.layouts.filter((x) => x !== l);
+  for (const d of orgDevices(req.orgId)) {
+    if (d.defaultPlaylistId === l.id) d.defaultPlaylistId = null;
+    d.schedule = d.schedule.filter((s) => s.playlistId !== l.id);
   }
-  bumpAll();
+  bumpOrg(req.orgId);
   res.json({ ok: true });
 });
 
-api.get('/devices', (_req, res) => res.json(db.devices));
+// ---- screens ----------------------------------------------------------------------------------------------
+// A waiting screen is listed only when this server has a single store. With several stores, a screen can be
+// added only by typing the code shown on it, so one store never sees another store's waiting screens.
+api.get('/devices', (req, res) => {
+  const waiting = db.orgs.length === 1 ? db.devices.filter((d) => !d.paired && !d.orgId) : [];
+  res.json([...orgDevices(req.orgId), ...waiting]);
+});
 api.post('/devices/claim', (req, res) => {
-  const d = db.devices.find((x) => !x.paired && x.pairingCode === String(req.body?.code || '').trim());
-  if (!d) return res.status(404).json({ error: 'No device is waiting with that code' });
+  const d = db.devices.find((x) => !x.paired && !x.orgId && x.pairingCode === String(req.body?.code || '').trim());
+  if (!d) return res.status(404).json({ error: 'No screen is waiting with that code' });
+  d.orgId = req.orgId;
   d.paired = true;
   d.pairingCode = null;
-  d.name = req.body?.name || d.model || 'Screen';
+  d.name = String(req.body?.name || d.model || 'Screen').slice(0, 80);
   d.rev++;
   save();
   notifyDevice(d);
   res.json(d);
 });
 api.put('/devices/:id', (req, res) => {
-  const d = db.devices.find((x) => x.id === req.params.id);
-  if (!d) return res.status(404).json({ error: 'not found' });
+  const d = own(db.devices, req, req.params.id);
+  if (!d) return notFound(res);
   const { name, defaultPlaylistId, schedule } = req.body || {};
-  if (typeof name === 'string') d.name = name;
-  if (defaultPlaylistId !== undefined) d.defaultPlaylistId = defaultPlaylistId || null;
+  const content = (id) => own(db.playlists, req, id) || own(db.layouts, req, id); // a playlist or a layout of this store
+  if (typeof name === 'string') d.name = name.slice(0, 80);
+  if (defaultPlaylistId !== undefined) d.defaultPlaylistId = defaultPlaylistId && content(defaultPlaylistId) ? defaultPlaylistId : null;
   if (Array.isArray(schedule)) {
-    d.schedule = schedule.map((s) => ({
+    d.schedule = schedule.filter((s) => content(String(s.playlistId))).map((s) => ({
       playlistId: String(s.playlistId),
       days: (s.days || []).map(Number).filter((n) => n >= 0 && n <= 6),
       start: /^\d\d:\d\d$/.test(s.start) ? s.start : '00:00',
@@ -434,59 +484,61 @@ api.put('/devices/:id', (req, res) => {
   res.json(d);
 });
 api.post('/devices/:id/refresh', (req, res) => {
-  const d = db.devices.find((x) => x.id === req.params.id);
-  if (!d) return res.status(404).json({ error: 'not found' });
+  const d = own(db.devices, req, req.params.id);
+  if (!d) return notFound(res);
   d.rev++;
   save();
   notifyDevice(d);
   res.json(d);
 });
 api.delete('/devices/:id', (req, res) => {
-  db.devices = db.devices.filter((x) => x.id !== req.params.id);
-  for (const w of db.walls) w.members = w.members.filter((m) => m.deviceId !== req.params.id);
+  const d = own(db.devices, req, req.params.id);
+  if (!d) return notFound(res);
+  db.devices = db.devices.filter((x) => x !== d);
+  for (const w of mine(db.walls, req)) w.members = w.members.filter((m) => m.deviceId !== d.id);
   save();
+  notifyDevice(d); // the TV asks again, finds it is unknown and shows a new pairing code
   res.json({ ok: true });
 });
 
-function bumpAll() {
-  for (const d of db.devices) d.rev++;
-  save();
-  notify();
-}
-
-// ---- emergency alerts: full-screen takeover on all (or chosen) screens, pushed instantly ----
-api.get('/alert', (_req, res) => res.json(db.alert && db.alert.until > Date.now() ? db.alert : null));
+// ---- emergency alerts: full-screen takeover on all (or chosen) screens of this store, pushed instantly ----
+const activeAlert = (orgId) => { const a = db.alerts[orgId]; return a && a.until > Date.now() ? a : null; };
+api.get('/alert', (req, res) => res.json(activeAlert(req.orgId)));
 api.post('/alert', (req, res) => {
   const message = String(req.body?.message || '').trim().slice(0, 500);
   if (!message) return res.status(400).json({ error: 'Type the alert message' });
   const minutes = Math.min(1440, Math.max(1, Number(req.body?.minutes) || 5));
-  const deviceIds = (req.body?.deviceIds || []).filter((id) => db.devices.some((d) => d.id === id));
-  db.alert = {
+  const deviceIds = (req.body?.deviceIds || []).filter((id) => own(db.devices, req, id));
+  const a = db.alerts[req.orgId] = {
     id: uid(), message, deviceIds, until: Date.now() + minutes * 60000,
     color: /^#[0-9a-f]{6}$/i.test(req.body?.color) ? req.body.color : '#c62828',
   };
   save();
-  notify(db.devices.filter((d) => !deviceIds.length || deviceIds.includes(d.id)).map((d) => d.deviceId));
-  res.json(db.alert);
+  notify(orgDevices(req.orgId).filter((d) => !deviceIds.length || deviceIds.includes(d.id)).map((d) => d.deviceId));
+  res.json(a);
 });
-api.delete('/alert', (_req, res) => {
-  db.alert = null;
+api.delete('/alert', (req, res) => {
+  delete db.alerts[req.orgId];
   save();
-  notify();
+  notify(orgDevices(req.orgId).map((d) => d.deviceId));
   res.json({ ok: true });
 });
 
-// ---- proof of play ----
-function readPlays(days) {
+// ---- proof of play (only this store's lines) ----
+function readPlays(days, orgId) {
   if (!fs.existsSync(PLAYS_FILE)) return [];
   const since = Date.now() - days * 86400000;
   return fs.readFileSync(PLAYS_FILE, 'utf8').split('\n').filter(Boolean).flatMap((l) => {
-    try { const p = JSON.parse(l); return p.t >= since ? [p] : []; } catch { return []; }
+    try {
+      const p = JSON.parse(l);
+      const mineLine = p.o ? p.o === orgId : db.legacyOrgId === orgId; // lines from before stores existed have no "o"
+      return p.t >= since && mineLine ? [p] : [];
+    } catch { return []; }
   });
 }
 const daysParam = (req) => Math.min(365, Math.max(1, Number(req.query.days) || 7));
 api.get('/reports/plays', (req, res) => {
-  const plays = readPlays(daysParam(req));
+  const plays = readPlays(daysParam(req), req.orgId);
   const agg = (keyOf, nameOf) => {
     const m = new Map();
     for (const p of plays) {
@@ -498,14 +550,14 @@ api.get('/reports/plays', (req, res) => {
   };
   res.json({
     total: plays.length,
-    byMedia: agg((p) => p.i, (p) => db.media.find((x) => x.id === p.i)?.name || p.n),
-    byScreen: agg((p) => p.d, (p) => db.devices.find((x) => x.id === p.d)?.name || 'Removed screen'),
+    byMedia: agg((p) => p.i, (p) => own(db.media, req, p.i)?.name || p.n),
+    byScreen: agg((p) => p.d, (p) => own(db.devices, req, p.d)?.name || 'Removed screen'),
   });
 });
 api.get('/reports/plays.csv', (req, res) => {
   const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = readPlays(daysParam(req)).map((p) =>
-    [new Date(p.t).toISOString(), q(db.devices.find((x) => x.id === p.d)?.name || p.d), q(db.media.find((x) => x.id === p.i)?.name || p.n), (p.ms / 1000).toFixed(1)].join(','));
+  const rows = readPlays(daysParam(req), req.orgId).map((p) =>
+    [new Date(p.t).toISOString(), q(own(db.devices, req, p.d)?.name || p.d), q(own(db.media, req, p.i)?.name || p.n), (p.ms / 1000).toFixed(1)].join(','));
   res.type('text/csv').send(['time,screen,media,seconds', ...rows].join('\n') + '\n');
 });
 
@@ -517,7 +569,7 @@ api.post('/media/widget', (req, res) => {
   if (kind !== 'clock' && !String(b.text || '').trim()) return res.status(400).json({ error: 'Type the text to show' });
   const color = (v, d) => (/^#[0-9a-f]{6}$/i.test(v) ? v : d);
   const m = {
-    id: uid(), type: 'web', provider: 'widget', size: 0, createdAt: Date.now(),
+    id: uid(), orgId: req.orgId, type: 'web', provider: 'widget', size: 0, createdAt: Date.now(),
     name: b.name || (kind === 'clock' ? 'Clock' : String(b.text).slice(0, 40)),
     widget: { kind, text: String(b.text || '').slice(0, 1000), bg: color(b.bg, '#0b1220'), fg: color(b.fg, '#ffffff') },
   };
@@ -527,10 +579,12 @@ api.post('/media/widget', (req, res) => {
 });
 
 const hooks = {}; // lets the catalog tell the poster module when a product changed
-registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, hooks });
-registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bumpAll, hooks });
+registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, hooks, requireFeature: auth.requireFeature });
+registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bumpOrg, hooks, requireFeature: auth.requireFeature });
 hooks.retireStale(); // also at start-up, in case an offer expired while the server was off
 
+app.use('/api/platform', auth.platform);
+app.use('/api', auth.account);
 app.use('/api', api);
 
 app.listen(PORT, () => {

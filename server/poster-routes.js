@@ -10,19 +10,21 @@ export const TEMPLATES = ['flagship', 'camera', 'gaming', 'offer', 'launch', 'br
 export const SIZES = ['landscape', 'portrait', 'square', 'a4', 'a3'];
 export const CATEGORIES = [
   'Latest smartphones', 'Premium flagships', 'Best-value smartphones', 'Camera-focused phones', 'Gaming phones',
-  'Approved promotional offers', 'myT Mobiles store branding',
+  'Approved promotional offers', 'Store branding',
 ];
 
 const str = (v, max) => String(v ?? '').trim().slice(0, max);
 const num = (v, lo, hi, d) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : d);
 const sha = (o) => crypto.createHash('sha1').update(JSON.stringify(o)).digest('hex');
 
-export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bumpAll, hooks = {} }) {
+export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bumpOrg, hooks = {}, requireFeature }) {
+  api.use('/posters', requireFeature('catalog')); // switched on per store by the platform administrator
+  const ownPoster = (req) => db.posters.find((p) => p.id === req.params.id && p.orgId === req.orgId);
   const h = (fn) => async (req, res) => {
     try { await fn(req, res); } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
   };
   const fail = (status, message) => Object.assign(new Error(message), { status });
-  const product = (po) => db.products.find((p) => p.id === po.productId);
+  const product = (po) => db.products.find((p) => p.id === po.productId && p.orgId === po.orgId);
 
   /** Everything that decides what the poster shows. If this changes after approval, the poster needs review again. */
   const contentHash = (po) => sha({
@@ -44,15 +46,15 @@ export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bu
    * playlist so TVs stop showing it. Staff review, approve and add it again.
    */
   function retireStale() {
-    let changed = false;
+    const changedOrgs = new Set();
     for (const po of db.posters) {
       if (!po.mediaId || po.retiredAt || po.status !== 'approved' || po.approvedHash === contentHash(po)) continue;
-      for (const pl of db.playlists) pl.items = pl.items.filter((i) => i.mediaId !== po.mediaId);
+      for (const pl of db.playlists) if (pl.orgId === po.orgId) pl.items = pl.items.filter((i) => i.mediaId !== po.mediaId);
       po.retiredAt = Date.now();
-      changed = true;
+      changedOrgs.add(po.orgId);
     }
-    if (changed) bumpAll();
-    return changed;
+    for (const orgId of changedOrgs) bumpOrg(orgId);
+    return changedOrgs.size > 0;
   }
   hooks.retireStale = retireStale;
   setInterval(retireStale, 60_000).unref();
@@ -81,29 +83,29 @@ export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bu
     return o;
   }
   const blank = () => ({
-    id: uid(), productId: null, template: 'flagship', size: 'landscape', category: '', texts: { headline: '', tagline: '', footer: '' },
+    id: uid(), orgId: null, productId: null, template: 'flagship', size: 'landscape', category: '', texts: { headline: '', tagline: '', footer: '' },
     image: { file: '', zoom: 100, offsetX: 0, offsetY: 0 }, options: { showSpecs: true, showPrice: true, showOffers: true, variantIndex: 0 },
     status: 'draft', approvedAt: null, approvedHash: null, mediaId: null, createdAt: Date.now(), updatedAt: Date.now(),
   });
 
   api.get('/posters/meta', (_req, res) => res.json({ templates: TEMPLATES, sizes: SIZES, categories: CATEGORIES }));
   api.get('/posters', (req, res) => {
-    const list = db.posters.filter((p) => (!req.query.category || p.category === req.query.category) && (!req.query.status || p.status === req.query.status));
+    const list = db.posters.filter((p) => p.orgId === req.orgId).filter((p) => (!req.query.category || p.category === req.query.category) && (!req.query.status || p.status === req.query.status));
     res.json(list.map(view));
   });
   api.get('/posters/:id', h((req, res) => {
-    const po = db.posters.find((p) => p.id === req.params.id);
+    const po = ownPoster(req);
     if (!po) throw fail(404, 'Poster not found');
     res.json(view(po));
   }));
   api.post('/posters', h((req, res) => {
-    const po = clean(req.body || {}, blank());
+    const po = clean(req.body || {}, { ...blank(), orgId: req.orgId });
     db.posters.push(po);
     save();
     res.json(view(po));
   }));
   api.put('/posters/:id', h((req, res) => {
-    const old = db.posters.find((p) => p.id === req.params.id);
+    const old = ownPoster(req);
     if (!old) throw fail(404, 'Poster not found');
     const next = clean(req.body || {}, old);
     Object.assign(next, { status: 'draft', approvedAt: null, approvedHash: null, updatedAt: Date.now() }); // any edit needs a new approval
@@ -112,13 +114,15 @@ export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bu
     res.json(view(next));
   }));
   api.delete('/posters/:id', h((req, res) => {
-    db.posters = db.posters.filter((p) => p.id !== req.params.id);
+    const po = ownPoster(req);
+    if (!po) throw fail(404, 'Poster not found');
+    db.posters = db.posters.filter((p) => p !== po);
     save();
     res.json({ ok: true });
   }));
 
   api.post('/posters/:id/approve', h((req, res) => {
-    const po = db.posters.find((p) => p.id === req.params.id);
+    const po = ownPoster(req);
     if (!po) throw fail(404, 'Poster not found');
     if (po.template !== 'brand') {
       const p = product(po);
@@ -132,7 +136,7 @@ export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bu
     res.json(view(po));
   }));
   api.post('/posters/:id/unapprove', h((req, res) => {
-    const po = db.posters.find((p) => p.id === req.params.id);
+    const po = ownPoster(req);
     if (!po) throw fail(404, 'Poster not found');
     Object.assign(po, { status: 'draft', approvedAt: null, approvedHash: null });
     save();
@@ -141,7 +145,7 @@ export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bu
 
   // The browser sends the rendered PNG/JPEG. It becomes (or replaces) an item in the normal media library.
   api.post('/posters/:id/library', upload.single('file'), h((req, res) => {
-    const po = db.posters.find((p) => p.id === req.params.id);
+    const po = ownPoster(req);
     const drop = () => req.file && fs.rmSync(req.file.path, { force: true });
     if (!po) { drop(); throw fail(404, 'Poster not found'); }
     const v = view(po);
@@ -154,15 +158,15 @@ export function registerPosterRoutes({ api, db, save, uid, MEDIA_DIR, upload, bu
     fs.closeSync(fd);
     const ext = imageExt(head);
     if (ext !== '.png' && ext !== '.jpg') { drop(); throw fail(400, 'Send a PNG or JPEG image'); }
-    const name = `${v.productName || 'myT Mobiles'} poster`;
-    let m = db.media.find((x) => x.id === po.mediaId);
+    const name = `${v.productName || 'Store'} poster`;
+    let m = db.media.find((x) => x.id === po.mediaId && x.orgId === po.orgId);
     po.retiredAt = null; // published again after review
     if (m) { // keep the same media id so playlists that use it keep working
       if (m.file) fs.rmSync(path.join(MEDIA_DIR, m.file), { force: true });
       Object.assign(m, { file: req.file.filename, size: req.file.size, name });
-      bumpAll();
+      bumpOrg(po.orgId);
     } else {
-      m = { id: uid(), name, type: 'image', file: req.file.filename, size: req.file.size, createdAt: Date.now(), posterId: po.id };
+      m = { id: uid(), orgId: po.orgId, name, type: 'image', file: req.file.filename, size: req.file.size, createdAt: Date.now(), posterId: po.id };
       db.media.push(m);
       po.mediaId = m.id;
       save();

@@ -4,23 +4,25 @@ import path from 'node:path';
 import * as C from './catalog.js';
 import * as I from './importer.js';
 
-export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, hooks = {} }) {
+export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, hooks = {}, requireFeature }) {
+  api.use(['/products', '/catalog'], requireFeature('catalog')); // switched on per store by the platform administrator
   const changed = () => hooks.retireStale?.(); // posters built from a product must be re-checked when it changes
-  const find = (id) => db.products.find((p) => p.id === id);
+  const find = (req) => db.products.find((p) => p.id === req.params.id && p.orgId === req.orgId); // other stores' products do not exist here
   const view = (p) => ({ ...p, warnings: C.warnings(p), fresh: C.isFresh(p) });
   const h = (fn) => async (req, res) => {
     try { await fn(req, res); } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
   };
-  const getOr404 = (req) => find(req.params.id) || Object.assign(new Error('Product not found'), { status: 404 });
+  const getOr404 = (req) => find(req) || Object.assign(new Error('Product not found'), { status: 404 });
   const throwIf = (e) => { if (e instanceof Error) throw e; return e; };
 
-  api.get('/catalog/meta', (_req, res) => res.json({
-    brands: C.BRANDS, offerTypes: C.OFFER_TYPES, stock: C.STOCK, staleDays: C.STALE_DAYS, defaultStore: I.DEFAULT_STORE, today: C.today(),
+  api.get('/catalog/meta', (req, res) => res.json({
+    brands: C.BRANDS, offerTypes: C.OFFER_TYPES, stock: C.STOCK, staleDays: C.STALE_DAYS, importSource: req.org.importSource || '', today: C.today(),
   }));
 
   api.get('/products', (req, res) => {
     const q = String(req.query.q || '').toLowerCase();
     const list = db.products
+      .filter((p) => p.orgId === req.orgId)
       .filter((p) => (!req.query.brand || p.brand === req.query.brand) && (!req.query.status || p.status === req.query.status))
       .filter((p) => !q || `${p.brand} ${p.model}`.toLowerCase().includes(q))
       .sort((a, b) => `${a.brand} ${a.model}`.localeCompare(`${b.brand} ${b.model}`));
@@ -29,6 +31,7 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, h
 
   api.post('/products', h((req, res) => {
     const p = C.newProduct(req.body || {}, uid);
+    p.orgId = req.orgId;
     db.products.push(p);
     save();
     res.json(view(p));
@@ -58,6 +61,7 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, h
   api.delete('/products/:id', h((req, res) => {
     const p = throwIf(getOr404(req));
     for (const i of p.images) fs.rmSync(path.join(MEDIA_DIR, i.file), { force: true });
+    for (const po of db.posters) if (po.orgId === req.orgId && po.productId === p.id) po.productId = null; // keeps old posters from pointing at a deleted product
     db.products = db.products.filter((x) => x !== p);
     save();
     res.json({ ok: true });
@@ -98,9 +102,10 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, h
   api.get('/products/:id/poster-data', h((req, res) => res.json(C.posterData(throwIf(getOr404(req))))));
 
   // ---- import from the store website ------------------------------------------------------
-  let job = { running: false };
+  const jobs = new Map(); // storeId -> import progress (one import per store at a time)
+  const idle = { running: false };
 
-  async function addImages(p, wanted) {
+  async function addImages(job, p, wanted) {
     const have = new Set(p.images.map((i) => i.url).filter(Boolean));
     for (const img of wanted.slice(0, 16)) {
       if (have.has(img.url)) continue;
@@ -115,18 +120,18 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, h
     }
   }
 
-  async function upsert(parsed) {
+  async function upsert(job, orgId, parsed) {
     const stamp = C.today();
-    const existing = db.products.find((p) => p.sourceUrl === parsed.sourceUrl);
+    const existing = db.products.find((p) => p.sourceUrl === parsed.sourceUrl && p.orgId === orgId);
     const fields = {
       brand: parsed.brand, model: parsed.model, condition: parsed.condition, colours: parsed.colours, variants: parsed.variants,
       highlights: parsed.highlights, specs: parsed.specs, stock: parsed.stock, sourceUrl: parsed.sourceUrl,
-      sourceName: 'myT Mobiles online store',
+      sourceName: `${db.orgs.find((o) => o.id === orgId)?.name || 'Store'} online store`,
     };
     if (!existing) {
       const p = C.newProduct({ ...fields, posterSpecs: parsed.posterSpecs }, uid);
-      Object.assign(p, { sourceCheckedOn: stamp, sourceHash: parsed.sourceHash, posterSpecsDerived: parsed.posterSpecs });
-      await addImages(p, parsed.images);
+      Object.assign(p, { orgId, sourceCheckedOn: stamp, sourceHash: parsed.sourceHash, posterSpecsDerived: parsed.posterSpecs });
+      await addImages(job, p, parsed.images);
       db.products.push(p);
       job.imported++;
     } else if (existing.sourceHash === parsed.sourceHash) {
@@ -136,7 +141,7 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, h
         existing.posterSpecs = C.cleanPosterSpecs(parsed.posterSpecs);
         existing.posterSpecsDerived = existing.posterSpecs;
       }
-      await addImages(existing, parsed.images); // retry images that failed last time
+      await addImages(job, existing, parsed.images); // retry images that failed last time
       job.unchanged++;
     } else {
       // The store changed this listing. Refresh source facts, keep staff offers, and require a new verification.
@@ -146,19 +151,20 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, h
         status: 'draft', lastVerified: null, sourceCheckedOn: stamp, sourceChangedOn: stamp,
         sourceHash: parsed.sourceHash, posterSpecsDerived: parsed.posterSpecs,
       });
-      await addImages(next, parsed.images);
+      await addImages(job, next, parsed.images);
       db.products[db.products.indexOf(existing)] = next;
       job.updated++;
     }
   }
 
-  async function runImport(base) {
-    job = { running: true, base, startedAt: Date.now(), finishedAt: null, total: 0, read: 0, imported: 0, updated: 0, unchanged: 0, images: 0, errors: [] };
+  async function runImport(orgId, base) {
+    const job = { running: true, base, startedAt: Date.now(), finishedAt: null, total: 0, read: 0, imported: 0, updated: 0, unchanged: 0, images: 0, errors: [] };
+    jobs.set(orgId, job);
     try {
       const { products, errors } = await I.readCatalog(base, { onProgress: (p) => Object.assign(job, p) });
       job.errors.push(...errors);
       for (const parsed of products) {
-        try { await upsert(parsed); } catch (e) { job.errors.push(`${parsed.sourceUrl}: ${e.message}`); }
+        try { await upsert(job, orgId, parsed); } catch (e) { job.errors.push(`${parsed.sourceUrl}: ${e.message}`); }
         save();
       }
     } catch (e) { job.errors.push(e.message); }
@@ -170,10 +176,10 @@ export function registerCatalogRoutes({ api, db, save, uid, MEDIA_DIR, upload, h
   }
 
   api.post('/catalog/import', h((req, res) => {
-    if (job.running) return res.status(409).json({ error: 'An import is already running' });
-    const base = I.checkStoreUrl(req.body?.url || I.DEFAULT_STORE);
-    runImport(base); // runs in the background; poll GET /catalog/import
+    if (jobs.get(req.orgId)?.running) return res.status(409).json({ error: 'An import is already running' });
+    const base = I.checkStoreUrl(req.org.importSource); // the address set by the platform administrator, never from the request
+    runImport(req.orgId, base); // runs in the background; poll GET /catalog/import
     res.status(202).json({ started: true });
   }));
-  api.get('/catalog/import', (_req, res) => res.json(job));
+  api.get('/catalog/import', (req, res) => res.json(jobs.get(req.orgId) || idle));
 }

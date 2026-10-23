@@ -142,8 +142,8 @@ function catAdvice(category) {
   const st = catStats(category);
   if (st.ready.length) return { ok: true, text: `${st.ready.length} poster${st.ready.length === 1 ? ' is' : 's are'} ready. A playlist will be created or updated with them (10 seconds each).` };
   if (!st.total) {
-    return { ok: false, text: category === 'myT Mobiles store branding'
-      ? 'No posters have this category yet. Click “+ New poster”, choose the Store brand template, set the category to “myT Mobiles store branding”, then approve it and add it to the media library.'
+    return { ok: false, text: category === 'Store branding'
+      ? 'No posters have this category yet. Click “+ New poster”, choose the Store brand template, set the category to “Store branding”, then approve it and add it to the media library.'
       : 'No posters have this category yet. Use “Create a slideshow from products” above (it sets the category from its last dropdown), or open a poster and set its category.' };
   }
   if (st.review) return { ok: false, text: `${st.total} poster${st.total === 1 ? '' : 's'} here, but ${st.review} changed since approval or ${st.review === 1 ? 'was' : 'were'} removed. Open ${st.review === 1 ? 'it' : 'them'}, check the preview, approve again and add to the media library again.` };
@@ -166,7 +166,7 @@ async function buildCategoryPlaylist() {
   const category = pickCat;
   const ready = catStats(category).ready.sort((a, b) => a.productName.localeCompare(b.productName));
   if (!ready.length) return render();
-  const name = `myT Mobiles – ${category.replace(/^myT Mobiles /, '')}`; // avoid repeating the store name
+  const name = `${ORG.name} – ${category}`;
   const lists = await api('/playlists');
   const pl = lists.find((l) => l.name === name) || await api('/playlists', { method: 'POST', body: { name } });
   await api(`/playlists/${pl.id}`, { method: 'PUT', body: { name, items: ready.map((p) => ({ mediaId: p.mediaId, duration: 10 })) } });
@@ -268,7 +268,7 @@ function renderPosterEditor() {
 function playlistAdder() {
   if (!addPl) return '<div class="row" style="margin-top:8px"><button onclick="openPlaylistAdder()">Add to a playlist…</button><small>Then choose that playlist for a screen under Screens.</small></div>';
   return `<div class="row" style="margin-top:8px"><select id="addPlSel" onchange="addPl.sel=this.value;render()">${addPl.lists.map((l) => `<option value="${l.id}" ${addPl.sel === l.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}<option value="" ${addPl.sel === '' ? 'selected' : ''}>New playlist…</option></select>
-    ${addPl.sel === '' ? '<input id="addPlName" placeholder="New playlist name" value="myT Mobiles posters">' : ''}
+    ${addPl.sel === '' ? '<input id="addPlName" placeholder="New playlist name" value="${esc(ORG.name)} posters">' : ''}
     <button class="primary" onclick="addPosterToPlaylist()">Add</button><button onclick="addPl=null;render()">Cancel</button></div>`;
 }
 async function openPlaylistAdder() { const lists = await api('/playlists'); addPl = { lists, sel: lists[0]?.id || '' }; render(); }
